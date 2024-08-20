@@ -1,44 +1,56 @@
 model:
   base_learning_rate: 4.5e-6
-  target: workspace.thomas.latentDiffusion.stable-diffusion.ldm.models.autoencoder.AutoencoderKL
+  target: stable-diffusion.ldm.models.autoencoder.VQModel
   params:
-    monitor: "val/rec_loss"
-    embed_dim: 3
-    lossconfig:
-      target: workspace.thomas.latentDiffusion.stable-diffusion.ldm.modules.losses.LPIPSWithDiscriminator
-      params:
-        disc_start: 50001
-        kl_weight: 0.000001
-        disc_weight: 0.5
+    embed_dim: 4
+    n_embed: 16384
+    monitor: val/rec_loss
 
     ddconfig:
-      double_z: True
-      z_channels: 3
+      attn_type: none
+      double_z: false
+      z_channels: 4
       resolution: 256
       in_channels: 3
       out_ch: 3
       ch: 128
-      ch_mult: [ 1,2,4 ]  # num_down = len(ch_mult)-1
+      ch_mult:
+      - 1
+      - 2
+      - 2
+      - 4
       num_res_blocks: 2
-      attn_resolutions: [ ]
+      attn_resolutions:
+      - 32
       dropout: 0.0
-
+    lossconfig:
+      target: ldm.modules.losses.vqperceptual.VQLPIPSWithDiscriminator
+      params:
+        n_classes: 1
+        disc_conditional: false
+        disc_in_channels: 3
+        disc_num_layers: 2
+        disc_start: 1
+        disc_weight: 0.6
+        codebook_weight: 1.0
+        n_classes: null
+        n_classes: 16384
 
 data:
-  target: workspace.thomas.latentDiffusion.trainAutoencoder.CustomImagePickleDataset
+  target: CustomImagePickleDataset
   params:
-    batch_size: 12
-    wrap: True
+    batch_size: 1
+    num_workers: 1
     train:
-      target: workspace.thomas.MuaSlices.train
+      target: CustomImagePickleDataset
       params:
-        size: 256
-        degradation: pil_nearest
+        data_root: /workspace/thomas/MuaSlices/train
+        size: 1024
     validation:
-      target: workspace.thomas.MuaSlices.val
+      target: CustomImagePickleDataset
       params:
-        size: 256
-        degradation: pil_nearest
+        data_root: /workspace/thomas/MuaSlices/train
+        size: 1024
 
 lightning:
   callbacks:

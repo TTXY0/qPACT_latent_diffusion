@@ -1,47 +1,21 @@
 import os
+import sys
+print(sys.path)
 import torch
 import pytorch_lightning as pl
 import yaml
 from torch.utils.data import DataLoader, Dataset
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
-from ldm.util import instantiate_from_config
+from ldm.models.autoencoder import VQModel
 from ldm.modules.losses import LPIPSWithDiscriminator
 import pickle
 import numpy as np
 
-
-class Autoencoder(pl.LightningModule):
-    def __init__(self, config):
-        super().__init__()
-        self.model = instantiate_from_config(config['model'])
-        self.learning_rate = config['model']['base_learning_rate']
-        self.criterion = LPIPSWithDiscriminator()  # Replace with your loss function if different
-
-    def forward(self, x):
-        return self.model(x)
-
-    def training_step(self, batch, batch_idx):
-        images = batch['image']
-        outputs = self(images)
-        loss = self.criterion(outputs, images)
-        self.log('train_loss', loss)
-        return loss
-
-    def validation_step(self, batch, batch_idx):
-        images = batch['image']
-        outputs = self(images)
-        loss = self.criterion(outputs, images)
-        self.log('val_loss', loss)
-        return loss
-
-    def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
-        return optimizer
-
-
 class CustomImagePickleDataset(Dataset):
     def __init__(self, data_root, size=512):
+        if not os.path.exists(data_root):
+            raise FileNotFoundError(f"The directory {data_root} does not exist.")
         self.data_root = data_root
         self.file_list = os.listdir(data_root)
         self.size = size
@@ -50,10 +24,11 @@ class CustomImagePickleDataset(Dataset):
         return len(self.file_list)
 
     def __getitem__(self, idx):
-        with open(os.path.join(self.data_root, self.file_list[idx]), 'rb') as f:
+        file_path = os.path.join(self.data_root, self.file_list[idx])
+        with open(file_path, 'rb') as f:
             image = pickle.load(f)
 
-        # Convert to NumPy array
+        # Assuming the pickle file contains a NumPy array
         image = image.numpy()
         
         # Normalize to uint8 (0-255)
@@ -62,10 +37,10 @@ class CustomImagePickleDataset(Dataset):
         # Convert grayscale to RGB
         image = np.stack([image] * 3, axis=-1)
 
-        # Resize and convert to tensor
-        image = torch.tensor(image, dtype=torch.float32).permute(2, 0, 1)  # HWC to CHW
+        # Convert to tensor and reshape to CHW
+        # image = torch.tensor(image, dtype=torch.float32)#.permute(2, 0, 1)
 
-        return {"image": image, "file_path_": os.path.join(self.data_root, self.file_list[idx])}
+        return {"image": image, "file_path_": file_path}
 
 
 if __name__ == "__main__":
@@ -75,17 +50,29 @@ if __name__ == "__main__":
 
     # Seed everything for reproducibility
     seed_everything(config.get('seed', 42))
+    
+    # Calculate learning rate
+    bs = config['data']['params']['batch_size']
+    base_lr = config['model']['base_learning_rate']
+    ngpu = 1  
+    accumulate_grad_batches = config.get('lightning', {}).get('trainer', {}).get('accumulate_grad_batches', 1)
+    
+    if config.get('opt', {}).get('scale_lr', True):
+        learning_rate = accumulate_grad_batches * ngpu * bs * base_lr
+    else:
+        learning_rate = base_lr
 
     # Instantiate datasets
-    train_dataset = CustomImagePickleDataset(data_root=config['data']['train_data_root'])
-    val_dataset = CustomImagePickleDataset(data_root=config['data']['val_data_root'])
+    train_dataset = CustomImagePickleDataset(data_root=config['data']['params']['train']['params']['data_root'])
+    val_dataset = CustomImagePickleDataset(data_root=config['data']['params']['validation']['params']['data_root'])
 
     # Create dataloaders
-    train_dataloader = DataLoader(train_dataset, batch_size=config['data']['batch_size'], shuffle=True, num_workers=4)
-    val_dataloader = DataLoader(val_dataset, batch_size=config['data']['batch_size'], shuffle=False, num_workers=4)
+    train_dataloader = DataLoader(train_dataset, batch_size=config['data']['params']['batch_size'], shuffle=True, num_workers=4)
+    val_dataloader = DataLoader(val_dataset, batch_size=config['data']['params']['batch_size'], shuffle=False, num_workers=4)
 
     # Initialize model
-    model = Autoencoder(config)
+    model = VQModel(**config['model']['params'])
+    model.learning_rate = learning_rate
 
     # Callbacks for checkpointing and learning rate monitoring
     checkpoint_callback = ModelCheckpoint(monitor='val_loss', save_top_k=3, mode='min')

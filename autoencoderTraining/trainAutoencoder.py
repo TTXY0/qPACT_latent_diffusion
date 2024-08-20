@@ -1,14 +1,13 @@
 import os
 import sys
-print(sys.path)
-import torch
-import pytorch_lightning as pl
+# print(sys.path)
+# import torch
+# import pytorch_lightning as pl
 import yaml
 from torch.utils.data import DataLoader, Dataset
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
-from ldm.models.autoencoder import VQModel
-from ldm.modules.losses import LPIPSWithDiscriminator
+from autoencoder import VQModel
 import pickle
 import numpy as np
 
@@ -28,30 +27,24 @@ class CustomImagePickleDataset(Dataset):
         with open(file_path, 'rb') as f:
             image = pickle.load(f)
 
-        # Assuming the pickle file contains a NumPy array
         image = image.numpy()
         
-        # Normalize to uint8 (0-255)
         image = (image * 255).astype(np.uint8)
         
-        # Convert grayscale to RGB
+        # Convert grayscale to RGB (change to conv layer later)
         image = np.stack([image] * 3, axis=-1)
-
-        # Convert to tensor and reshape to CHW
-        # image = torch.tensor(image, dtype=torch.float32)#.permute(2, 0, 1)
 
         return {"image": image, "file_path_": file_path}
 
 
 if __name__ == "__main__":
-    config_path = 'config.yaml'  # Replace with your YAML config path
+    config_path = 'config.yaml' 
     with open(config_path, 'r') as file:
         config = yaml.safe_load(file)
 
-    # Seed everything for reproducibility
     seed_everything(config.get('seed', 42))
     
-    # Calculate learning rate
+    #  learning rate calculation
     bs = config['data']['params']['batch_size']
     base_lr = config['model']['base_learning_rate']
     ngpu = 1  
@@ -62,30 +55,30 @@ if __name__ == "__main__":
     else:
         learning_rate = base_lr
 
-    # Instantiate datasets
     train_dataset = CustomImagePickleDataset(data_root=config['data']['params']['train']['params']['data_root'])
     val_dataset = CustomImagePickleDataset(data_root=config['data']['params']['validation']['params']['data_root'])
 
-    # Create dataloaders
+    # dataloaders
     train_dataloader = DataLoader(train_dataset, batch_size=config['data']['params']['batch_size'], shuffle=True, num_workers=4)
     val_dataloader = DataLoader(val_dataset, batch_size=config['data']['params']['batch_size'], shuffle=False, num_workers=4)
 
-    # Initialize model
-    model = VQModel(**config['model']['params'])
+    if 'ckpt_path' in config['model']['params']:
+        model = VQModel(**config['model']['params'])
+        model.init_from_ckpt(config['model']['params']['ckpt_path'])
+    else:
+        model = VQModel(**config['model']['params'])
     model.learning_rate = learning_rate
 
-    # Callbacks for checkpointing and learning rate monitoring
+    # checkpointing and learning rate monitoring
     checkpoint_callback = ModelCheckpoint(monitor='val_loss', save_top_k=3, mode='min')
     lr_monitor = LearningRateMonitor(logging_interval='step')
 
-    # Trainer
     trainer = Trainer(
-        max_epochs=config.get('max_epochs', 10),
-        gpus=config.get('gpus', 1),  # Adjust based on your setup
-        callbacks=[checkpoint_callback, lr_monitor],
-        precision=16 if config.get('use_amp', False) else 32,
-        log_every_n_steps=10
+        max_epochs=config['lightning']['trainer']['max_epochs'],
+        gpus=config['lightning']['trainer']['gpus'],
+        precision=config['lightning']['trainer']['precision'],
+        log_every_n_steps=config['lightning']['trainer']['log_every_n_steps'],
+        callbacks=[checkpoint_callback, lr_monitor]
     )
 
-    # Train the model
     trainer.fit(model, train_dataloader, val_dataloader)

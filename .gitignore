@@ -1,1 +1,3 @@
 autoencoderTraining/model.ckpt
+autoencoderTraining/kl-f8.ckpt
+autoencoderTraining/vq-f8.ckpt

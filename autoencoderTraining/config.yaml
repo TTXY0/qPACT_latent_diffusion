@@ -1,15 +1,18 @@
 model:
-  base_learning_rate: 4.5e-6
-  target: autoencoder.VQModel
-  # target: stable-diffusion.ldm.models.autoencoder.VQModel
+  base_learning_rate: 4.5e-06
+  target: ldm.models.autoencoder.AutoencoderKL
   params:
-    embed_dim: 4
-    n_embed: 16384
     monitor: val/rec_loss
-    ckpt_path: model.ckpt
-
+    ckpt_path: kl-f8.ckpt
+    embed_dim: 4
+    lossconfig:
+      target: ldm.modules.losses.LPIPSWithDiscriminator
+      params:
+        disc_start: 50001
+        kl_weight: 1.0e-06
+        disc_weight: 0.5
     ddconfig:
-      double_z: false
+      double_z: true
       z_channels: 4
       resolution: 256
       in_channels: 3
@@ -18,23 +21,12 @@ model:
       ch_mult:
       - 1
       - 2
-      - 2
+      - 4
       - 4
       num_res_blocks: 2
-      attn_resolutions: [32, 16, 8, 4]
+      attn_resolutions: []
       dropout: 0.0
-      # attn_type: self-attn
-    lossconfig:
-      # target: ldm.modules.losses.vqperceptual.VQLPIPSWithDiscriminator
-      target: vqperceptual.VQLPIPSWithDiscriminator
-      params:
-        disc_conditional: false
-        disc_in_channels: 3
-        disc_num_layers: 2
-        disc_start: 1
-        disc_weight: 0.6
-        codebook_weight: 1.0
-        n_classes: 16384
+
 
 data:
   target: CustomImagePickleDataset

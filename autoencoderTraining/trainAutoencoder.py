@@ -7,7 +7,7 @@ import yaml
 from torch.utils.data import DataLoader, Dataset
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
-from autoencoder import VQModel
+from autoencoder import AutoencoderKL
 import pickle
 import numpy as np
 
@@ -32,8 +32,8 @@ class CustomImagePickleDataset(Dataset):
         image = (image * 255).astype(np.uint8)
         
         # Convert grayscale to RGB (change to conv layer later)
-        image = np.stack([image] * 3, axis=-1)
-
+        # image = np.stack([image] * 3, axis=-1)
+        print("CustomImagePickleDataset")
         return {"image": image, "file_path_": file_path}
 
 
@@ -63,13 +63,13 @@ if __name__ == "__main__":
     val_dataloader = DataLoader(val_dataset, batch_size=config['data']['params']['batch_size'], shuffle=False, num_workers=4)
 
     if 'ckpt_path' in config['model']['params']:
-        model = VQModel(**config['model']['params'])
+        model = AutoencoderKL(**config['model']['params'])
         model.init_from_ckpt(config['model']['params']['ckpt_path'])
     else:
-        model = VQModel(**config['model']['params'])
+        model = AutoencoderKL(**config['model']['params'])
     model.learning_rate = learning_rate
 
-    # checkpointing and learning rate monitoring
+    # checkpointing and learning rate 
     checkpoint_callback = ModelCheckpoint(monitor='val_loss', save_top_k=3, mode='min')
     lr_monitor = LearningRateMonitor(logging_interval='step')
 

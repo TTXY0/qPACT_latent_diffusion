@@ -298,6 +298,13 @@ class AutoencoderKL(pl.LightningModule):
         self.encoder = Encoder(**ddconfig)
         self.decoder = Decoder(**ddconfig)
         self.loss = instantiate_from_config(lossconfig)
+        
+        
+        self.pre_layer = torch.nn.Conv2d(1, 3, kernel_size=4, stride=4, padding=0)
+        self.post_layer = torch.nn.ConvTranspose2d(3, 1, kernel_size=4, stride=4, padding=0)
+        
+        #self.pre_layer.weight = torch.ones()
+        
         assert ddconfig["double_z"]
         self.quant_conv = torch.nn.Conv2d(2*ddconfig["z_channels"], 2*embed_dim, 1)
         self.post_quant_conv = torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1)
@@ -309,6 +316,12 @@ class AutoencoderKL(pl.LightningModule):
             self.monitor = monitor
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
+    
+    def preprocess(self, x):
+        return self.pre_layer(x)
+
+    def post_process(self, x):
+        return self.post_layer(x)
 
     def init_from_ckpt(self, path, ignore_keys=list()):
         sd = torch.load(path, map_location="cpu")["state_dict"]
@@ -318,10 +331,14 @@ class AutoencoderKL(pl.LightningModule):
                 if k.startswith(ik):
                     print("Deleting key {} from state_dict.".format(k))
                     del sd[k]
-        self.load_state_dict(sd, strict=False)
-        print(f"Restored from {path}")
+        missing, unexpected = self.load_state_dict(sd, strict=False)
+        print(f"Restored from {path} with {len(missing)} missing and {len(unexpected)} unexpected keys")
+        if len(missing) > 0:
+            print(f"Missing Keys: {missing}")
+            print(f"Unexpected Keys: {unexpected}")
 
     def encode(self, x):
+        x = self.preprocess(x)
         h = self.encoder(x)
         moments = self.quant_conv(h)
         posterior = DiagonalGaussianDistribution(moments)
@@ -330,9 +347,11 @@ class AutoencoderKL(pl.LightningModule):
     def decode(self, z):
         z = self.post_quant_conv(z)
         dec = self.decoder(z)
+        dec = self.post_process(dec)
         return dec
 
     def forward(self, input, sample_posterior=True):
+        print("forward call")
         posterior = self.encode(input)
         if sample_posterior:
             z = posterior.sample()
@@ -350,7 +369,12 @@ class AutoencoderKL(pl.LightningModule):
 
     def training_step(self, batch, batch_idx, optimizer_idx):
         inputs = self.get_input(batch, self.image_key)
-        reconstructions, posterior = self(inputs)
+        reconstructions, posterior = self(inputs) #forward
+        
+        if inputs.shape[1] == 1: 
+            inputs = inputs.repeat(1, 3, 1, 1)
+        if reconstructions.shape[1] == 1: 
+            reconstructions = reconstructions.repeat(1, 3, 1, 1)
 
         if optimizer_idx == 0:
             # train encoder+decoder+logvar
@@ -368,10 +392,18 @@ class AutoencoderKL(pl.LightningModule):
             self.log("discloss", discloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
             self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=False)
             return discloss
+        
+
 
     def validation_step(self, batch, batch_idx):
         inputs = self.get_input(batch, self.image_key)
         reconstructions, posterior = self(inputs)
+        
+        if inputs.shape[1] == 1:  # Grayscale
+            inputs = inputs.repeat(1, 3, 1, 1)
+        if reconstructions.shape[1] == 1:  # Grayscale
+            reconstructions = reconstructions.repeat(1, 3, 1, 1)
+
         aeloss, log_dict_ae = self.loss(inputs, reconstructions, posterior, 0, self.global_step,
                                         last_layer=self.get_last_layer(), split="val")
 
@@ -382,6 +414,8 @@ class AutoencoderKL(pl.LightningModule):
         self.log_dict(log_dict_ae)
         self.log_dict(log_dict_disc)
         return self.log_dict
+
+
 
     def configure_optimizers(self):
         lr = self.learning_rate

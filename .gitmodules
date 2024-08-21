@@ -1,3 +1,7 @@
 [submodule "stable-diffusion"]
 	path = stable-diffusion
 	url = https://github.com/CompVis/stable-diffusion
+
+[submodule "taming-transformers"]
+	path = taming-transformers
+	url = https://github.com/CompVis/taming-transformers

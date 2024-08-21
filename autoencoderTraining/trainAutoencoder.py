@@ -33,7 +33,7 @@ class CustomImagePickleDataset(Dataset):
         
         # Convert grayscale to RGB (change to conv layer later)
         # image = np.stack([image] * 3, axis=-1)
-        print("CustomImagePickleDataset")
+        # print("CustomImagePickleDataset")
         return {"image": image, "file_path_": file_path}
 
 

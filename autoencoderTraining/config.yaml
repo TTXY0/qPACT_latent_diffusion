@@ -1,5 +1,5 @@
 model:
-  base_learning_rate: 4.5e-06
+  base_learning_rate: 2.5e-08
   target: ldm.models.autoencoder.AutoencoderKL
   params:
     monitor: val/rec_loss
@@ -55,5 +55,5 @@ lightning:
   trainer:
     max_epochs: 10
     gpus: 1
-    precision: 16  
+    precision: 32
     log_every_n_steps: 10

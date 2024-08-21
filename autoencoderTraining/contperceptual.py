@@ -31,7 +31,7 @@ class LPIPSWithDiscriminator(nn.Module):
 
     def calculate_adaptive_weight(self, nll_loss, g_loss, last_layer=None):
         if last_layer is not None:
-            # nll_loss = nll_loss / 10000000
+            #nll_loss = nll_loss / 10000000
             nll_grads = torch.autograd.grad(nll_loss, last_layer, retain_graph=True)[0]
             g_grads = torch.autograd.grad(g_loss, last_layer, retain_graph=True)[0]
         else:

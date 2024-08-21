@@ -2,7 +2,7 @@ import torch
 import pytorch_lightning as pl
 import torch.nn.functional as F
 from contextlib import contextmanager
-
+import numpy as np
 from taming.modules.vqvae.quantize import VectorQuantizer2 as VectorQuantizer
 from packaging import version # ONLY CHANGE
 from ldm.modules.diffusionmodules.model import Encoder, Decoder
@@ -299,7 +299,6 @@ class AutoencoderKL(pl.LightningModule):
         self.decoder = Decoder(**ddconfig)
         self.loss = instantiate_from_config(lossconfig)
         
-        
         self.pre_layer = torch.nn.Conv2d(1, 3, kernel_size=4, stride=4, padding=0)
         self.post_layer = torch.nn.ConvTranspose2d(3, 1, kernel_size=4, stride=4, padding=0)
         
@@ -365,16 +364,29 @@ class AutoencoderKL(pl.LightningModule):
             x = x[..., None]
         x = x.permute(0, 3, 1, 2).to(memory_format=torch.contiguous_format).float()
         return x
+    
+    def print_tensor_statistics(self, tensor, name="Tensor"):
+        print(f"Statistics for {name}:")
+        print(f"Mean: {tensor.mean().item()}")
+        print(f"Standard Deviation: {tensor.std().item()}")
+        print(f"Minimum Value: {tensor.min().item()}")
+        print(f"Maximum Value: {tensor.max().item()}")
+        print(f"Median: {tensor.median().item()}")
+        print(f"Number of NaN Values: {torch.isnan(tensor).sum().item()}")
+        print(f"Number of Inf Values: {torch.isinf(tensor).sum().item()}")
+        print("")
 
     def training_step(self, batch, batch_idx, optimizer_idx):
         inputs = self.get_input(batch, self.image_key)
-        reconstructions, posterior = self(inputs) #forward
+        reconstructions, posterior = self(inputs)  # forward
         
-        if inputs.shape[1] == 1: 
+        # Ensure inputs and reconstructions have the correct number of channels
+        if inputs.shape[1] == 1:
             inputs = inputs.repeat(1, 3, 1, 1)
-        if reconstructions.shape[1] == 1: 
+        if reconstructions.shape[1] == 1:
             reconstructions = reconstructions.repeat(1, 3, 1, 1)
-
+        # self.print_tensor_statistics(inputs)
+        # self.print_tensor_statistics(reconstructions)
         if optimizer_idx == 0:
             # train encoder+decoder+logvar
             aeloss, log_dict_ae = self.loss(inputs, reconstructions, posterior, optimizer_idx, self.global_step,
@@ -391,7 +403,8 @@ class AutoencoderKL(pl.LightningModule):
             self.log("discloss", discloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
             self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=False)
             return discloss
-        
+
+            
 
 
     def validation_step(self, batch, batch_idx):
@@ -428,7 +441,7 @@ class AutoencoderKL(pl.LightningModule):
         return [opt_ae, opt_disc], []
 
     def get_last_layer(self):
-        return self.decoder.conv_out.weight
+        return self.post_layer.weight
 
     @torch.no_grad()
     def log_images(self, batch, only_inputs=False, **kwargs):

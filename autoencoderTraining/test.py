@@ -193,9 +193,13 @@ fig, axes = plt.subplots(len(image_files), 3, figsize=(15, 5 * len(image_files))
 for i, img_path in enumerate(image_files):
  
     img = Image.open(img_path).convert("RGB")
+    
+    
+    img_array = np.array(img)
+    
     img_tensor = transform(img).unsqueeze(0).to(device)
     original_image = img_tensor.clone()
-
+    #print(type(img_tensor))
     with torch.no_grad():
         reconstruction, _ = model(img_tensor)
 

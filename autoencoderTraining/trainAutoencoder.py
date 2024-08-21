@@ -10,6 +10,8 @@ from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, Learning
 from autoencoder import AutoencoderKL
 import pickle
 import numpy as np
+import matplotlib.pyplot as plt
+# from torch.optim.lr_scheduler import LambdaLR
 
 class CustomImagePickleDataset(Dataset):
     def __init__(self, data_root, size=512):
@@ -34,7 +36,13 @@ class CustomImagePickleDataset(Dataset):
         # Shift to [-1, 1]
         image = 2 * image - 1
 
+        # display_image = (image + 1) / 2
+        # plt.imshow(display_image, cmap='gray')
+        # plt.axis('off')  
+        # plt.savefig("output_image.png")
+        # plt.close() 
         return {"image": image, "file_path_": file_path}
+
 
 
 if __name__ == "__main__":

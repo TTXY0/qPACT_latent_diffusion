@@ -6,7 +6,7 @@ model:
     ckpt_path: /workspace/thomas/latentDiffusion/autoencoderTraining/kl-f8.ckpt
     embed_dim: 4
     lossconfig:
-      target: ldm.modules.losses.LPIPSWithDiscriminator
+      target: contperceptual.LPIPSWithDiscriminator
       params:
         disc_start: 50001
         kl_weight: 1.0e-06

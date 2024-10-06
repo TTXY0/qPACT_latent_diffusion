@@ -3,6 +3,7 @@ import pytorch_lightning as pl
 import torch.nn.functional as F
 from contextlib import contextmanager
 import numpy as np
+# import matplotlib.pyplot as plt
 from taming.modules.vqvae.quantize import VectorQuantizer2 as VectorQuantizer
 from packaging import version # ONLY CHANGE
 from ldm.modules.diffusionmodules.model import Encoder, Decoder
@@ -299,9 +300,16 @@ class AutoencoderKL(pl.LightningModule):
         self.decoder = Decoder(**ddconfig)
         self.loss = instantiate_from_config(lossconfig)
         
-        self.pre_layer = torch.nn.Conv2d(1, 3, kernel_size=4, stride=4, padding=0)
-        self.post_layer = torch.nn.ConvTranspose2d(3, 1, kernel_size=4, stride=4, padding=0)
-        
+        self.pre_layer = torch.nn.Conv2d(1, 3, kernel_size=4, stride=4, padding=0, bias=False)
+        self.upsample = torch.nn.ConvTranspose2d(in_channels=3, out_channels=1, kernel_size=4, stride=4, padding=0, bias=False)
+        with torch.no_grad(): 
+            # self.pre_layer.weight.data.fill_(1/16)
+            # self.upsample.weight.data.fill_(1/3)
+            
+            self.pre_layer.weight.data.fill_(1/16)
+            self.upsample.weight.data.fill_(1/3)
+
+            
         #self.pre_layer.weight = torch.ones()
         
         assert ddconfig["double_z"]
@@ -320,7 +328,9 @@ class AutoencoderKL(pl.LightningModule):
         return self.pre_layer(x)
 
     def post_process(self, x):
-        return self.post_layer(x)
+        x = self.upsample(x)
+        # x = self.conv_rgb_gray(x) 
+        return x
 
     def init_from_ckpt(self, path, ignore_keys=list()):
         sd = torch.load(path, map_location="cpu")["state_dict"]
@@ -337,16 +347,35 @@ class AutoencoderKL(pl.LightningModule):
             print(f"Unexpected Keys: {unexpected}")
 
     def encode(self, x):
+        # print("Range right before pre_layer:")
+        # print(f"Min: {x.min().item()}, Max: {x.max().item()}")
         x = self.preprocess(x)
+        # print("Range after pre_layer:")
+        # print(f"Min: {x.min().item()}, Max: {x.max().item()}")
+        #x_one_channel = x[0, 0, :, :].detach().cpu().numpy()
+        # plt.imshow(x_one_channel, vmin=-1, vmax=1)
+        # plt.colorbar()
+        # plt.savefig('test.png')
+        # plt.close()
         h = self.encoder(x)
         moments = self.quant_conv(h)
         posterior = DiagonalGaussianDistribution(moments)
         return posterior
 
     def decode(self, z):
+        # print(z.shape)
         z = self.post_quant_conv(z)
         dec = self.decoder(z)
+        # print("Range right before post_processing:")
+        # print(f"Min: {dec.min().item()}, Max: {dec.max().item()}")
         dec = self.post_process(dec)
+        # print("Range after post_processing:")
+        # print(f"Min: {dec.min().item()}, Max: {dec.max().item()}")
+        # dec_one_channel = dec[0, 0, :, :].detach().cpu().numpy()
+        # plt.imshow(dec_one_channel, vmin=-1, vmax=1)
+        # plt.colorbar()
+        # plt.savefig('test3.png')
+        # plt.close()
         return dec
 
     def forward(self, input, sample_posterior=True):
@@ -431,18 +460,24 @@ class AutoencoderKL(pl.LightningModule):
 
     def configure_optimizers(self):
         lr = self.learning_rate
-        opt_ae = torch.optim.Adam(list(self.encoder.parameters())+
-                                  list(self.decoder.parameters())+
-                                  list(self.quant_conv.parameters())+
-                                  list(self.post_quant_conv.parameters()),
-                                  lr=lr, betas=(0.5, 0.9))
+
+        opt_ae = torch.optim.Adam(list(self.encoder.parameters()) +
+                                list(self.decoder.parameters()) +
+                                list(self.quant_conv.parameters()) +
+                                list(self.post_quant_conv.parameters()) +
+                                list(self.pre_layer.parameters()) +         
+                                list(self.upsample.parameters()),     
+                                # list(self.conv_rgb_gray.parameters()),        
+                                lr=lr, betas=(0.5, 0.9))
+        
+        # Discriminator optimization (if applicable)
         opt_disc = torch.optim.Adam(self.loss.discriminator.parameters(),
                                     lr=lr, betas=(0.5, 0.9))
+        
         return [opt_ae, opt_disc], []
 
     def get_last_layer(self):
-        return self.post_layer.weight
-
+        return self.upsample.weight
     @torch.no_grad()
     def log_images(self, batch, only_inputs=False, **kwargs):
         log = dict()

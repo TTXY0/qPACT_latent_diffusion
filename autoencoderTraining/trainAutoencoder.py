@@ -51,16 +51,7 @@ if __name__ == "__main__":
         config = yaml.safe_load(file)
 
     seed_everything(config.get('seed', 42))
-    
-    #  learning rate calculation
-    # bs = config['data']['params']['batch_size']
     base_lr = config['model']['base_learning_rate']
-    # ngpu = 3
-    # accumulate_grad_batches = config.get('lightning', {}).get('trainer', {}).get('accumulate_grad_batches', 1)
-    
-    # if config.get('opt', {}).get('scale_lr', True):
-    #     learning_rate = accumulate_grad_batches * ngpu * bs * base_lr
-    # else:
     learning_rate = base_lr
 
     train_dataset = CustomImagePickleDataset(data_root=config['data']['params']['train']['params']['data_root'])
@@ -77,9 +68,7 @@ if __name__ == "__main__":
         model = AutoencoderKL(**config['model']['params'])
     model.learning_rate = learning_rate
 
-    # checkpointing and learning rate 
     checkpoint_callback = ModelCheckpoint(monitor='val/rec_loss', save_top_k=3, mode='min')
-    # lr_monitor = LearningRateMonitor(logging_interval='step')
     early_stopping_callback = EarlyStopping(monitor='val/rec_loss', patience=3, mode='min', verbose=True)
 
     trainer = Trainer(

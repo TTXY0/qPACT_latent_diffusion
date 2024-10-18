@@ -17,7 +17,7 @@ def load_image(file_path):
     image = (image - image.min()) / (image.max() - image.min())  
     image = 2 * image - 1  # Shift to [-1, 1]
     image = torch.tensor(image, dtype=torch.float32).unsqueeze(0).unsqueeze(0)  
-    print("input image range : ", image.min().item(), image.max().item())
+    # print("input image range : ", image.min().item(), image.max().item())
     return image
 
 import matplotlib.pyplot as plt
@@ -33,8 +33,8 @@ def show_images(original, reconstructed, save_path=None):
                                             crop_width:crop_width + original_shape[1]]
     difference_np = np.subtract(original_np, cropped_reconstructed_np)
     difference_np = np.subtract(original_np, reconstructed_np)
-    print("original range: ", original_np.min(), original_np.max())
-    print("recnstructed range: ", reconstructed_np.min(), reconstructed_np.max())
+    # print("original range: ", original_np.min(), original_np.max())
+    # print("recnstructed range: ", reconstructed_np.min(), reconstructed_np.max())
     vmin = -1
     vmax = 1
 
@@ -69,15 +69,16 @@ if __name__ == "__main__":
     # Set up the model
     model = AutoencoderKL(**config['model']['params'])
     #model.init_from_ckpt("/workspace/thomas/latentDiffusion/autoencoderTraining/epoch=9-step=33340.ckpt")
-    #model.init_from_ckpt("/workspace/thomas/latentDiffusion/epoch=6-step=23338.ckpt")
-    model.init_from_ckpt("/workspace/thomas/latentDiffusion/autoencoderTraining/kl-f8.ckpt")
+    model.init_from_ckpt("/workspace/thomas/latentDiffusion/epoch=6-step=23338.ckpt")
+    # model.init_from_ckpt("/workspace/thomas/latentDiffusion/autoencoderTraining/kl-f8.ckpt")
+    # model.init_from_ckpt("/workspace/thomas/latentDiffusion/autoencoderTraining/lightning_logs/version_1/checkpoints/epoch=2-step=20000.ckpt")
     model.eval()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
 
 
     image_dir = '/workspace/thomas/MuaSlices/train' 
-    for img_number in range(1) :
+    for img_number in range(10) :
         image_file = os.path.join(image_dir, os.listdir(image_dir)[img_number])  # Get the first image file
         original_image = load_image(image_file)
 
@@ -90,4 +91,4 @@ if __name__ == "__main__":
 
         #difference_image = torch.abs(original_image - reconstructed_image)
 
-        show_images(original_image, reconstructed_image, save_path=f"0_epochs{img_number}.png")
+        show_images(original_image, reconstructed_image, save_path=f"6_epochs{img_number}.png")

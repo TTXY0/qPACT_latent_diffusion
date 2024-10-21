@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 from taming.modules.losses.vqperceptual import *  # TODO: taming dependency yes/no?
-
+from torchmetrics.image.ssim import SSIM
 
 class LPIPSWithDiscriminator(nn.Module):
     def __init__(self, disc_start, logvar_init=0.0, kl_weight=1.0, pixelloss_weight=1.0,
@@ -18,7 +18,8 @@ class LPIPSWithDiscriminator(nn.Module):
         self.perceptual_weight = perceptual_weight
         # output log variance
         self.logvar = nn.Parameter(torch.ones(size=()) * logvar_init)
-        # self.logvar = nn.Parameter(torch.ones(size=()) * -5.0)
+        self.logvar = nn.Parameter(torch.ones(size=()) * -5.0)
+        #self.ssim_loss_fn = SSIM()
         self.discriminator = NLayerDiscriminator(input_nc=disc_in_channels,
                                                  n_layers=disc_num_layers,
                                                  use_actnorm=use_actnorm
@@ -31,12 +32,12 @@ class LPIPSWithDiscriminator(nn.Module):
         
     def get_partials(self, tensor):
         # partial derivatives
-        dx = tensor[:, :, :, 1:] - tensor[:, :, :, :-1]  # Difference along width (x-axis)
-        dy = tensor[:, :, 1:, :] - tensor[:, :, :-1, :]  # Difference along height (y-axis)
+        dx = tensor[:, :, :, 1:] - tensor[:, :, :, :-1] 
+        dy = tensor[:, :, 1:, :] - tensor[:, :, :-1, :]
 
         # Pad to maintain original size
-        dx = F.pad(dx, (0, 1, 0, 0))  # Pad along width (x-axis)
-        dy = F.pad(dy, (0, 0, 0, 1))  # Pad along height (y-axis)
+        dx = F.pad(dx, (0, 1, 0, 0)) 
+        dy = F.pad(dy, (0, 0, 0, 1)) 
 
         return dx, dy
 
@@ -54,69 +55,36 @@ class LPIPSWithDiscriminator(nn.Module):
         d_weight = d_weight * self.discriminator_weight
         return d_weight
 
-    def forward(self, inputs, reconstructions, posteriors, optimizer_idx,
+    def forward(self, inputs, reconstructions, posteriors,
                 global_step, last_layer=None, cond=None, split="train",
                 weights=None):
-        # print('right file')
-        rec_loss = torch.abs(inputs.contiguous() - reconstructions.contiguous())
+        pixel_loss = torch.abs(inputs.contiguous() - reconstructions.contiguous())
+        # ssim_loss = self.ssim_loss_fn(inputs.contiguous() - reconstructions.contiguous())
         input_partial1, input_partial2 = self.get_partials(inputs)
         recon_partial1, recon_partial2 = self.get_partials(reconstructions)
-        rec_loss = rec_loss + (torch.abs(input_partial1 - recon_partial1) + torch.abs(input_partial2 - recon_partial2))/1 # try h = 1 first 
-        # if self.perceptual_weight > 0:
-        #     assert self.perceptual_weight == 0, f"d_weight is not zero: {self.perceptual_weight}"
-        #     p_loss = self.perceptual_loss(inputs.contiguous(), reconstructions.contiguous())
-        #     rec_loss = rec_loss + self.perceptual_weight * p_loss
-
+        gradient_loss =  (torch.abs(input_partial1 - recon_partial1) + torch.abs(input_partial2 - recon_partial2))/.01 # 
+        rec_loss = pixel_loss + gradient_loss
+        
         nll_loss = rec_loss / torch.exp(self.logvar) + self.logvar
         weighted_nll_loss = nll_loss
         if weights is not None:
             weighted_nll_loss = weights*nll_loss
         weighted_nll_loss = torch.sum(weighted_nll_loss) / weighted_nll_loss.shape[0]
+        
         nll_loss = torch.sum(nll_loss) / nll_loss.shape[0]
         kl_loss = posteriors.kl()
         kl_loss = torch.sum(kl_loss) / kl_loss.shape[0]
-
-        # now the GAN part
-        if optimizer_idx == 0:
-            # generator update
-            # if cond is None:
-            #     assert not self.disc_conditional
-            #     logits_fake = self.discriminator(reconstructions.contiguous())
-            # else:
-            #     assert self.disc_conditional
-            #     logits_fake = self.discriminator(torch.cat((reconstructions.contiguous(), cond), dim=1))
-            # g_loss = -torch.mean(logits_fake)
-
-            disc_factor = adopt_weight(self.disc_factor, global_step, threshold=self.discriminator_iter_start)
-            g_loss = torch.tensor(0.0)
-            d_weight = torch.tensor(0.0)
-            assert d_weight.item() == 0.0, f"d_weight is not zero: {d_weight.item()}"
-            assert g_loss.item() == 0.0, f"g_loss is not zero: {g_loss.item()}"
-            loss = weighted_nll_loss + self.kl_weight * kl_loss + d_weight * disc_factor * g_loss
-            log = {"{}/total_loss".format(split): loss.clone().detach().mean(), "{}/logvar".format(split): self.logvar.detach(),
-                   "{}/kl_loss".format(split): kl_loss.detach().mean(), "{}/nll_loss".format(split): nll_loss.detach().mean(),
-                   "{}/rec_loss".format(split): rec_loss.detach().mean(),
-                   "{}/d_weight".format(split): d_weight.detach(),
-                   "{}/disc_factor".format(split): torch.tensor(disc_factor),
-                   "{}/g_loss".format(split): g_loss.detach().mean(),
-                   }
-            return loss, log
-
-        if optimizer_idx == 1:
-            # second pass for discriminator update
-            if cond is None:
-                logits_real = self.discriminator(inputs.contiguous().detach())
-                logits_fake = self.discriminator(reconstructions.contiguous().detach())
-            else:
-                logits_real = self.discriminator(torch.cat((inputs.contiguous().detach(), cond), dim=1))
-                logits_fake = self.discriminator(torch.cat((reconstructions.contiguous().detach(), cond), dim=1))
-
-            disc_factor = adopt_weight(self.disc_factor, global_step, threshold=self.discriminator_iter_start)
-            d_loss = disc_factor * self.disc_loss(logits_real, logits_fake)
-
-            log = {"{}/disc_loss".format(split): d_loss.clone().detach().mean(),
-                   "{}/logits_real".format(split): logits_real.detach().mean(),
-                   "{}/logits_fake".format(split): logits_fake.detach().mean()
-                   }
-            return d_loss, log
-
+        
+        # Just for printing ... not used 
+        gradient_loss = torch.sum(gradient_loss) / gradient_loss.shape[0]
+        pixel_loss = torch.sum(pixel_loss) / pixel_loss.shape[0]
+        
+        loss = weighted_nll_loss + self.kl_weight * kl_loss
+        log = {"{}/total_loss".format(split): loss.clone().detach().mean(), "{}/logvar".format(split): self.logvar.detach(),
+                "{}/kl_loss".format(split): kl_loss.detach().mean(), "{}/nll_loss".format(split): nll_loss.detach().mean(),
+                "{}/rec_loss".format(split): rec_loss.detach().mean(),
+                # "{}/d_weight".format(split): d_weight.detach(),
+                # "{}/disc_factor".format(split): torch.tensor(disc_factor),
+                # "{}/g_loss".format(split): g_loss.detach().mean(),
+                }
+        return [loss, gradient_loss, pixel_loss], log

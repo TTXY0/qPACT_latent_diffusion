@@ -31,32 +31,38 @@ def show_images(original, reconstructed, save_path=None):
     crop_width = (reconstructed_shape[1] - original_shape[1]) // 2
     cropped_reconstructed_np = reconstructed_np[crop_height:crop_height + original_shape[0],
                                             crop_width:crop_width + original_shape[1]]
-    difference_np = np.subtract(original_np, cropped_reconstructed_np)
     difference_np = np.subtract(original_np, reconstructed_np)
     # print("original range: ", original_np.min(), original_np.max())
     # print("recnstructed range: ", reconstructed_np.min(), reconstructed_np.max())
     vmin = -1
     vmax = 1
 
-    fig, ax = plt.subplots(1, 3, figsize=(15, 5))
-    
-    ax[0].imshow(original_np, cmap='viridis')#, vmin=vmin, vmax=vmax)
+    fig, ax = plt.subplots(1, 3, figsize=(18, 6))
+
+    # Original Image
+    ax[0].imshow(original_np, cmap='viridis', vmin=vmin, vmax=vmax)
     ax[0].set_title("Original Image")
     ax[0].axis("off")
-    
-    ax[1].imshow(reconstructed_np, cmap='viridis')#, vmin=vmin, vmax=vmax)
+
+    # Reconstructed Image
+    ax[1].imshow(reconstructed_np, cmap='viridis', vmin=vmin, vmax=vmax)
     ax[1].set_title("Reconstructed Image")
     ax[1].axis("off")
-    
+
+    # Difference Image
     im = ax[2].imshow(difference_np, cmap='viridis', vmin=vmin, vmax=vmax)
     ax[2].set_title("Difference")
     ax[2].axis("off")
-    
-    # Add a colorbar to the difference image
-    fig.colorbar(im, ax=ax[2], orientation='vertical', fraction=0.05, pad=0.04)
-    
+
+    # Add a labeled colorbar for the Difference
+    cbar = fig.colorbar(im, ax=ax[2], orientation='vertical', fraction=0.046, pad=0.04)
+    cbar.set_label('Difference Intensity')
+
     if save_path:
+        plt.tight_layout()
         plt.savefig(save_path)
+        plt.close()
+
 
 
 if __name__ == "__main__":

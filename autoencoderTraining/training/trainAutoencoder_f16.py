@@ -9,7 +9,7 @@ from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, LearningRateMonitor
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from autoencoder import AutoencoderKL
+from models.autoencoder import AutoencoderKL
 import pickle
 import numpy as np
 import matplotlib.pyplot as plt
@@ -17,7 +17,7 @@ from pytorch_lightning.callbacks import Callback
 import torch.nn.functional as F
 import torch
 # from torch.optim.lr_scheduler import LambdaLR
-VER_NAME = "SSIM_double_downsample"
+VER_NAME = "f16"
 class CustomImagePickleDataset(Dataset):
     def __init__(self, data_root, size=512):
         if not os.path.exists(data_root):
@@ -170,9 +170,10 @@ if __name__ == "__main__":
     checkpoint_callback = ModelCheckpoint(monitor='val/rec_loss', save_top_k=3, mode='min')
     image_logger = ImageLoggingCallback(every_n_steps=10000)
     early_stopping_callback = EarlyStopping(monitor='val/rec_loss', patience=3, mode='min', verbose=True)
-    logger = TensorBoardLogger("tb_logs", name="autoencoder", 
+    logger = TensorBoardLogger("/workspace/thomas/latentDiffusion/autoencoderTraining/tb_logs", name="autoencoder", 
                            version=VER_NAME,
-                           default_hp_metric=False)
+                           default_hp_metric=False
+                           )
     weight_grad_logging = WeightAndGradientNormLoggingCallback()
     
     trainer = Trainer(

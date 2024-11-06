@@ -17,7 +17,7 @@ from pytorch_lightning.callbacks import Callback
 import torch.nn.functional as F
 import torch
 # from torch.optim.lr_scheduler import LambdaLR
-VER_NAME = "SSIM_double_downsample"
+VER_NAME = "noExplosion"
 class CustomImagePickleDataset(Dataset):
     def __init__(self, data_root, size=512):
         if not os.path.exists(data_root):

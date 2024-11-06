@@ -4,7 +4,7 @@ import torch
 import pickle
 import numpy as np
 import matplotlib.pyplot as plt
-from autoencoder import AutoencoderKL
+from latentDiffusion.autoencoderTraining.models.autoencoder import AutoencoderKL
 from PIL import Image
 
 

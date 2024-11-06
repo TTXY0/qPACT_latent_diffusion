@@ -170,7 +170,8 @@ if __name__ == "__main__":
     checkpoint_callback = ModelCheckpoint(monitor='val/rec_loss', save_top_k=3, mode='min')
     image_logger = ImageLoggingCallback(every_n_steps=10000)
     early_stopping_callback = EarlyStopping(monitor='val/rec_loss', patience=3, mode='min', verbose=True)
-    logger = TensorBoardLogger("/workspace/thomas/latentDiffusion/autoencoderTraining/tb_logs", name="autoencoder", 
+    log_dir = config['logfile']
+    logger = TensorBoardLogger(log_dir, 
                            version=VER_NAME,
                            default_hp_metric=False
                            )

@@ -3,7 +3,7 @@ model:
   target: ldm.models.autoencoder.AutoencoderKL
   params:
     monitor: val/rec_loss
-    ckpt_path: /workspace/thomas/latentDiffusion/autoencoderTraining/kl-f8.ckpt
+    ckpt_path: /workspace/thomas/latentDiffusion/autoencoderTraining/kl-f16.ckpt
     #ckpt_path: /workspace/thomas/latentDiffusion/autoencoderTraining/lightning_logs/version_166/checkpoints/epoch=0-step=9999.ckpt
     # ckpt_path : /workspace/thomas/latentDiffusion/epoch=1-step=6668.ckpt
     embed_dim: 4
@@ -23,6 +23,7 @@ model:
       ch_mult:
       - 1
       - 2
+      - 4
       - 4
       - 4
       num_res_blocks: 2

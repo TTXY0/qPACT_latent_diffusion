@@ -39,7 +39,7 @@ module load tacc-apptainer
 module list
 pwd
 date
-
+export TRAIN_ENV=super
 # Launch serial code...
 ./myprogram         # Do not use ibrun or any other MPI launcher
 cd /scratch/10122/thomaswynn7394/latentDiffusion/autoencoderTraining

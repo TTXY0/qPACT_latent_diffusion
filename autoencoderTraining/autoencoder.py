@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from contextlib import contextmanager
 import numpy as np
 # import matplotlib.pyplot as plt
-from taming.modules.vqvae.quantize import VectorQuantizer2 as VectorQuantizer
+# from taming.modules.vqvae.quantize import VectorQuantizer2 as VectorQuantizer
 from packaging import version # ONLY CHANGE
 from ldm.modules.diffusionmodules.model import Encoder, Decoder
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
@@ -29,11 +29,36 @@ class AutoencoderKL(pl.LightningModule):
         self.decoder = Decoder(**ddconfig)
         self.loss = instantiate_from_config(lossconfig)
         
-        self.pre_layer = torch.nn.Conv2d(1, 3, kernel_size=4, stride=4, padding=0, bias=False)
-        self.upsample = torch.nn.ConvTranspose2d(in_channels=3, out_channels=1, kernel_size=4, stride=4, padding=0, bias=False)
+        # self.pre_layer = torch.nn.Conv2d(1, 3, kernel_size=4, stride=4, padding=0, bias=False)
+        # self.upsample = torch.nn.ConvTranspose2d(in_channels=3, out_channels=1, kernel_size=4, stride=4, padding=0, bias=False)
+        #Consider overlap in convolution
+        # Two 2x downsampling layers
+        self.pre_layer_1 = torch.nn.Conv2d(1, 32, kernel_size=2, stride=2, padding=0, bias=False)
+        self.pre_layer_2 = torch.nn.Conv2d(32, 3, kernel_size=2, stride=2, padding=0, bias=False)
+
+        #  upsampling layers
+        self.upsample_1 = torch.nn.ConvTranspose2d(3, 32, kernel_size=2, stride=2, padding=0, bias=False)
+        self.upsample_2 = torch.nn.ConvTranspose2d(32, 1, kernel_size=2, stride=2, padding=0, bias=False)
+
+        
         with torch.no_grad(): 
-            self.pre_layer.weight.data.fill_(1/16)
-            self.upsample.weight.data.fill_(1/3)
+            # self.pre_layer.weight.data.fill_(1/16)
+            # self.upsample.weight.data.fill_(1/3)
+            
+            # for 1.3.3.3
+            # self.pre_layer_1.weight.data.fill_(1/4)
+            # self.pre_layer_2.weight.data.fill_(1/12)
+            
+            # self.upsample_1.weight.data.fill_(1/4)
+            # self.upsample_2.weight.data.fill_(1/3)
+            
+            # for 1.32.32.3
+            self.pre_layer_1.weight.data.fill_(1/4)
+            self.pre_layer_2.weight.data.fill_(1/128) # 32 by 2 by 2
+            
+            self.upsample_1.weight.data.fill_(1/3) 
+            self.upsample_2.weight.data.fill_(1/32)
+
         
         assert ddconfig["double_z"]
         self.quant_conv = torch.nn.Conv2d(2*ddconfig["z_channels"], 2*embed_dim, 1)
@@ -48,10 +73,27 @@ class AutoencoderKL(pl.LightningModule):
             self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
     
     def preprocess(self, x):
-        return self.pre_layer(x)
+        #print(f"Range of x before pre_layer_1: min = {x.min().item()}, max = {x.max().item()}")
+        
+        x = self.pre_layer_1(x)
+        
+        #print(f"Range of x after pre_layer_1: min = {x.min().item()}, max = {x.max().item()}")
+        x = self.pre_layer_2(x)
+        
+        #print(f"Range of x after pre_layer_2: min = {x.min().item()}, max = {x.max().item()}")
+
+        return x
 
     def post_process(self, x):
-        x = self.upsample(x)
+        #print(f"Range of x before upsample_1: min = {x.min().item()}, max = {x.max().item()}")
+        
+        x = self.upsample_1(x)
+        
+        #print(f"Range of x after upsample_1: min = {x.min().item()}, max = {x.max().item()}")
+
+        x = self.upsample_2(x)
+        #print(f"Range of x after upsample_2: min = {x.min().item()}, max = {x.max().item()}")
+
         return x
 
     def init_from_ckpt(self, path, ignore_keys=list()):
@@ -124,7 +166,8 @@ class AutoencoderKL(pl.LightningModule):
             last_layer=self.get_last_layer(),
             split="val"
             )
-        self.log("train/gradient_loss", loss[1], prog_bar=True, logger=True, on_step=True, on_epoch=True)
+        #self.log("train/rec_loss", loss[3], prog_bar=True, logger=True, on_step=True, on_epoch=True)
+        self.log("train/MS_SSIM_loss", loss[1], prog_bar=True, logger=True, on_step=True, on_epoch=True)
         self.log("train/pixel_loss", loss[2], prog_bar=True, logger=True, on_step=True, on_epoch=True)
         self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=False)
         return loss[0]
@@ -160,15 +203,17 @@ class AutoencoderKL(pl.LightningModule):
                                 list(self.decoder.parameters()) +
                                 list(self.quant_conv.parameters()) +
                                 list(self.post_quant_conv.parameters()) +
-                                list(self.pre_layer.parameters()) +         
-                                list(self.upsample.parameters()),     
+                                list(self.pre_layer_1.parameters()) +         
+                                list(self.pre_layer_2.parameters()) +    
+                                list(self.upsample_1.parameters()) +    
+                                list(self.upsample_2.parameters()),    
                                 # list(self.conv_rgb_gray.parameters()),        
                                 lr=lr, betas=(0.5, 0.9))
         # self.log("learning_rate", lr, prog_bar=True)
         return opt_ae
 
     def get_last_layer(self):
-        return self.upsample.weight
+        return self.upsample_2.weight
     @torch.no_grad()
     def log_images(self, batch, only_inputs=False, **kwargs):
         log = dict()
@@ -195,21 +240,21 @@ class AutoencoderKL(pl.LightningModule):
         return x
 
 
-class IdentityFirstStage(torch.nn.Module):
-    def __init__(self, *args, vq_interface=False, **kwargs):
-        self.vq_interface = vq_interface  # TODO: Should be true by default but check to not break older stuff
-        super().__init__()
+# class IdentityFirstStage(torch.nn.Module):
+#     def __init__(self, *args, vq_interface=False, **kwargs):
+#         self.vq_interface = vq_interface  # TODO: Should be true by default but check to not break older stuff
+#         super().__init__()
 
-    def encode(self, x, *args, **kwargs):
-        return x
+#     def encode(self, x, *args, **kwargs):
+#         return x
 
-    def decode(self, x, *args, **kwargs):
-        return x
+#     def decode(self, x, *args, **kwargs):
+#         return x
 
-    def quantize(self, x, *args, **kwargs):
-        if self.vq_interface:
-            return x, None, [None, None, None]
-        return x
+#     def quantize(self, x, *args, **kwargs):
+#         if self.vq_interface:
+#             return x, None, [None, None, None]
+#         return x
 
-    def forward(self, x, *args, **kwargs):
-        return x
+#     def forward(self, x, *args, **kwargs):
+#         return x

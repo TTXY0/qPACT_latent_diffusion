@@ -1,14 +1,14 @@
 model:
-  base_learning_rate: 1.0e-05
+  base_learning_rate: 1.0e-04
   target: ldm.models.autoencoder.AutoencoderKL
   params:
     monitor: val/rec_loss
-    ckpt_path: /workspace/thomas/latentDiffusion/autoencoderTraining/kl-f8.ckpt
-    #ckpt_path: /workspace/thomas/latentDiffusion/autoencoderTraining/lightning_logs/version_166/checkpoints/epoch=0-step=9999.ckpt
-    # ckpt_path : /workspace/thomas/latentDiffusion/epoch=1-step=6668.ckpt
+    ckpt_path: /scratch/10122/thomaswynn7394/latentDiffusion/autoencoderTraining/kl-f8.ckpt
+    # ckpt_path: /scratch/10122/thomaswynn7394/latentDiffusion/autoencoderTraining/lightning_logs/version_1910058/checkpoints/epoch=9-step=33340.ckpt
+    #ckpt_path: /scratch/10122/thomaswynn7394/latentDiffusion/autoencoderTraining/lightning_logs/version_9_epochs/checkpoints/epoch=9-step=33340.ckpt
     embed_dim: 4
     lossconfig:
-      target: contperceptual.LPIPSWithDiscriminator
+      target: loss.MSSSIM_Loss
       params:
         disc_start: 100000000000000
         kl_weight: 1.0e-06
@@ -29,21 +29,21 @@ model:
       attn_resolutions: []
       dropout: 0.0
 
-
 data:
   target: CustomImagePickleDataset
   params:
-    batch_size: 3
+    batch_size: 5
     num_workers: 5
+    persistent_workers: True
     train:
       target: CustomImagePickleDataset
       params:
-        data_root: /workspace/thomas/MuaSlices/train
+        data_root: /work/10122/thomaswynn7394/ls6/MuaSlices/train
         size: 1024
     validation:
       target: CustomImagePickleDataset
       params:
-        data_root: /workspace/thomas/MuaSlices/val
+        data_root: /work/10122/thomaswynn7394/ls6/MuaSlices/val
         size: 1024
 
 lightning:
@@ -51,11 +51,11 @@ lightning:
     image_logger:
       target: main.ImageLogger
       params:
-        batch_frequency: 1000
+        batch_frequency: 2000
         max_images: 8
         increase_log_steps: True
   trainer:
-    max_epochs: 10
-    gpus: 1
+    max_epochs: 15
+    gpus: 3
     precision: 32
-    log_every_n_steps: 10
+    log_every_n_steps: 100

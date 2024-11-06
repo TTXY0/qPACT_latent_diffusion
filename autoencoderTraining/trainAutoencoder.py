@@ -16,7 +16,7 @@ from pytorch_lightning.callbacks import Callback
 import torch.nn.functional as F
 import torch
 # from torch.optim.lr_scheduler import LambdaLR
-VER_NAME = "gradient_weight_0.01"
+VER_NAME = "SSIM_double_downsample"
 class CustomImagePickleDataset(Dataset):
     def __init__(self, data_root, size=512):
         if not os.path.exists(data_root):
@@ -135,16 +135,19 @@ class WeightAndGradientNormLoggingCallback(Callback):
                     grad_norm = param.grad.norm(2).item()
                     trainer.logger.experiment.add_scalar(f"grad_norms/{name}", grad_norm, trainer.global_step)
 
-
-
-
-
-
 if __name__ == "__main__":
-    config_path = '/workspace/thomas/latentDiffusion/autoencoderTraining/config.yaml' 
+    ENV = os.getenv('TRAIN_ENV', 'local')
+
+    config_paths = {
+        'super': '/scratch/10122/thomaswynn7394/latentDiffusion/autoencoderTraining/config_super_f8.yaml',
+        'local': '/workspace/thomas/latentDiffusion/autoencoderTraining/config_local_f8.yaml'
+    }
+    
+    config_path = config_paths.get(ENV, config_paths['local'])
+
     with open(config_path, 'r') as file:
         config = yaml.safe_load(file)
-
+        
     seed_everything(config.get('seed', 42))
     base_lr = config['model']['base_learning_rate']
     learning_rate = base_lr
@@ -164,7 +167,7 @@ if __name__ == "__main__":
     model.learning_rate = learning_rate
 
     checkpoint_callback = ModelCheckpoint(monitor='val/rec_loss', save_top_k=3, mode='min')
-    image_logger = ImageLoggingCallback(every_n_steps=100)
+    image_logger = ImageLoggingCallback(every_n_steps=10000)
     early_stopping_callback = EarlyStopping(monitor='val/rec_loss', patience=3, mode='min', verbose=True)
     logger = TensorBoardLogger("tb_logs", name="autoencoder", 
                            version=VER_NAME,

@@ -2,9 +2,9 @@ import torch
 import torch.nn as nn
 
 from taming.modules.losses.vqperceptual import *  # TODO: taming dependency yes/no?
-from torchmetrics.image.ssim import SSIM
+from pytorch_msssim import MS_SSIM
 
-class LPIPSWithDiscriminator(nn.Module):
+class MSSSIM_Loss(nn.Module):
     def __init__(self, disc_start, logvar_init=0.0, kl_weight=1.0, pixelloss_weight=1.0,
                  disc_num_layers=3, disc_in_channels=3, disc_factor=0, disc_weight=0,
                  perceptual_weight=0, use_actnorm=False, disc_conditional=False,
@@ -19,7 +19,7 @@ class LPIPSWithDiscriminator(nn.Module):
         # output log variance
         self.logvar = nn.Parameter(torch.ones(size=()) * logvar_init)
         self.logvar = nn.Parameter(torch.ones(size=()) * -5.0)
-        #self.ssim_loss_fn = SSIM()
+        self.msssim_loss_fn = MS_SSIM(data_range=1.0, size_average=True, channel=3)
         self.discriminator = NLayerDiscriminator(input_nc=disc_in_channels,
                                                  n_layers=disc_num_layers,
                                                  use_actnorm=use_actnorm
@@ -58,12 +58,13 @@ class LPIPSWithDiscriminator(nn.Module):
     def forward(self, inputs, reconstructions, posteriors,
                 global_step, last_layer=None, cond=None, split="train",
                 weights=None):
+        msssim_loss_weight = 1e6
         pixel_loss = torch.abs(inputs.contiguous() - reconstructions.contiguous())
-        # ssim_loss = self.ssim_loss_fn(inputs.contiguous() - reconstructions.contiguous())
+        msssim_loss = 1 - self.msssim_loss_fn(inputs.contiguous(), reconstructions.contiguous())
         input_partial1, input_partial2 = self.get_partials(inputs)
         recon_partial1, recon_partial2 = self.get_partials(reconstructions)
-        gradient_loss =  (torch.abs(input_partial1 - recon_partial1) + torch.abs(input_partial2 - recon_partial2))/.01 # 
-        rec_loss = pixel_loss + gradient_loss
+        gradient_loss =  (torch.abs(input_partial1 - recon_partial1) + torch.abs(input_partial2 - recon_partial2))/.1 # 
+        rec_loss = pixel_loss + msssim_loss * msssim_loss_weight
         
         nll_loss = rec_loss / torch.exp(self.logvar) + self.logvar
         weighted_nll_loss = nll_loss
@@ -87,4 +88,4 @@ class LPIPSWithDiscriminator(nn.Module):
                 # "{}/disc_factor".format(split): torch.tensor(disc_factor),
                 # "{}/g_loss".format(split): g_loss.detach().mean(),
                 }
-        return [loss, gradient_loss, pixel_loss], log
+        return [loss, msssim_loss.item() * msssim_loss_weight, pixel_loss], log

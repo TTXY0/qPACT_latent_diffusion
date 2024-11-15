@@ -141,7 +141,8 @@ if __name__ == "__main__":
 
     config_paths = {
         'super': '/scratch/10122/thomaswynn7394/latentDiffusion/autoencoderTraining/configs/config_super_f8.yaml',
-        'local': '/workspace/thomas/latentDiffusion/autoencoderTraining/configs/config_local_f8.yaml'
+        'local': '/workspace/thomas/latentDiffusion/autoencoderTraining/configs/config_local_f8.yaml',
+        'bevo' : '/home/twynn/Desktop/latentDiffusion/autoencoderTraining/configs/config_local_f8.yaml'
     }
     
     config_path = config_paths.get(ENV, config_paths['local'])

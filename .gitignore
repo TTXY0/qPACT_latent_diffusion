@@ -4,3 +4,4 @@ autoencoderTraining/tb_logs
 taming/modules/autoencoder/lpips/vgg.pth
 autoencoderTraining/data
 autoencoderTraining/weights
+autoencoderTraining/comparisons

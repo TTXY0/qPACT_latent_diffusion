@@ -31,14 +31,24 @@ class AutoencoderKL(pl.LightningModule):
         
         # self.pre_layer = torch.nn.Conv2d(1, 3, kernel_size=4, stride=4, padding=0, bias=False)
         # self.upsample = torch.nn.ConvTranspose2d(in_channels=3, out_channels=1, kernel_size=4, stride=4, padding=0, bias=False)
-        #Consider overlap in convolution
+
+
         # Two 2x downsampling layers
-        self.pre_layer_1 = torch.nn.Conv2d(1, 32, kernel_size=2, stride=2, padding=0, bias=False)
-        self.pre_layer_2 = torch.nn.Conv2d(32, 3, kernel_size=2, stride=2, padding=0, bias=False)
+        self.downsample_1 = torch.nn.Conv2d(1, 32, kernel_size=2, stride=2, padding=0, bias=False)
+        self.downsample_2 = torch.nn.Conv2d(32, 3, kernel_size=2, stride=2, padding=0, bias=False)
 
         #  upsampling layers
         self.upsample_1 = torch.nn.ConvTranspose2d(3, 32, kernel_size=2, stride=2, padding=0, bias=False)
         self.upsample_2 = torch.nn.ConvTranspose2d(32, 1, kernel_size=2, stride=2, padding=0, bias=False)
+
+        # Bottleneck downsample
+        self.pre_bottleneck_1 = torch.nn.Conv2d(8, 8, kernel_size=2, stride=2, padding=0, bias=False)
+        #self.pre_bottleneck_2 = torch.nn.Conv2d(8, 8, kernel_size=2, stride=2, padding=0, bias=False)
+
+        # Bottleneck upsample
+        self.post_bottleneck_1 = torch.nn.ConvTranspose2d(4, 4, kernel_size=2, stride=2, padding=0, bias=False)
+        #self.post_bottleneck_2 = torch.nn.ConvTranspose2d(4, 4, kernel_size=2, stride=2, padding=0, bias=False)
+
 
         
         with torch.no_grad(): 
@@ -53,16 +63,30 @@ class AutoencoderKL(pl.LightningModule):
             # self.upsample_2.weight.data.fill_(1/3)
             
             # for 1.32.32.3
-            self.pre_layer_1.weight.data.fill_(1/4)
-            self.pre_layer_2.weight.data.fill_(1/128) # 32 by 2 by 2
+            self.downsample_1.weight.data.fill_(1/4)
+            self.downsample_2.weight.data.fill_(1/128) # 32 by 2 by 2
             
             self.upsample_1.weight.data.fill_(1/3) 
             self.upsample_2.weight.data.fill_(1/32)
 
+            # pre-bottleneck layers
+            self.pre_bottleneck_1.weight.data.fill_(1/4)
+            #self.pre_bottleneck_2.weight.data.fill_(1/4)
+            
+            # post-bottleneck layers
+            self.post_bottleneck_1.weight.data.fill_(1/4)
+            #self.post_bottleneck_2.weight.data.fill_(1/4)
+
         
         assert ddconfig["double_z"]
+
         self.quant_conv = torch.nn.Conv2d(2*ddconfig["z_channels"], 2*embed_dim, 1)
         self.post_quant_conv = torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1)
+
+        # self.quant_conv = torch.nn.Conv2d(8, 8, 1)
+        # self.post_quant_conv = torch.nn.Conv2d(4, 4, 1)
+
+
         self.embed_dim = embed_dim
         if colorize_nlabels is not None:
             assert type(colorize_nlabels)==int
@@ -75,13 +99,29 @@ class AutoencoderKL(pl.LightningModule):
     def preprocess(self, x):
         #print(f"Range of x before pre_layer_1: min = {x.min().item()}, max = {x.max().item()}")
         
-        x = self.pre_layer_1(x)
+        x = self.downsample_1(x)
         
         #print(f"Range of x after pre_layer_1: min = {x.min().item()}, max = {x.max().item()}")
-        x = self.pre_layer_2(x)
+        x = self.downsample_2(x)
         
         #print(f"Range of x after pre_layer_2: min = {x.min().item()}, max = {x.max().item()}")
 
+        return x
+
+    def pre_bottleneck(self, x):
+        #print(f"Range of x before pre_bottleneck_1: min = {x.min().item()}, max = {x.max().item()}")
+        x = self.pre_bottleneck_1(x)
+        #print(f"Range of x after pre_bottleneck_1: min = {x.min().item()}, max = {x.max().item()}")
+        #x = self.pre_bottleneck_2(x)
+        #print(f"Range of x after pre_bottleneck_2: min = {x.min().item()}, max = {x.max().item()}")
+        return x
+
+    def post_bottleneck(self,x): 
+        #print(f"Range of x before post_bottleneck_1: min = {x.min().item()}, max = {x.max().item()}")
+        x = self.post_bottleneck_1(x)
+        #print(f"Range of x after post_bottleneck_1: min = {x.min().item()}, max = {x.max().item()}")
+        #x = self.post_bottleneck_2(x)
+        #print(f"Range of x after post_bottleneck_2: min = {x.min().item()}, max = {x.max().item()}")
         return x
 
     def post_process(self, x):
@@ -95,6 +135,24 @@ class AutoencoderKL(pl.LightningModule):
         #print(f"Range of x after upsample_2: min = {x.min().item()}, max = {x.max().item()}")
 
         return x
+    
+    def encode(self, x):
+        x = self.preprocess(x)
+        h = self.encoder(x)
+        h = self.pre_bottleneck(h)
+        # moments = self.quant_conv(h)
+        # print(f"Shape of h : {h.shape}")
+        posterior = DiagonalGaussianDistribution(h)
+        #print(posterior.sample().shape)
+        return posterior
+
+    def decode(self, z):
+        #print(f"Shape of z : {z.shape}")
+        # z = self.post_quant_conv(z)
+        z = self.post_bottleneck(z)
+        dec = self.decoder(z)
+        dec = self.post_process(dec)
+        return dec
 
     def init_from_ckpt(self, path, ignore_keys=list()):
         sd = torch.load(path, map_location="cpu")["state_dict"]
@@ -109,21 +167,6 @@ class AutoencoderKL(pl.LightningModule):
         if len(missing) > 0:
             print(f"Missing Keys: {missing}")
             print(f"Unexpected Keys: {unexpected}")
-
-    def encode(self, x):
-        x = self.preprocess(x)
-        h = self.encoder(x)
-        print(f"Range of x after self.encoder: min = {h.min().item()}, max = {h.max().item()}")
-        moments = self.quant_conv(h)
-        posterior = DiagonalGaussianDistribution(moments)
-        print(posterior.sample().shape)
-        return posterior
-
-    def decode(self, z):
-        z = self.post_quant_conv(z)
-        dec = self.decoder(z)
-        dec = self.post_process(dec)
-        return dec
 
     def forward(self, input, sample_posterior=True):
         posterior = self.encode(input)
@@ -201,18 +244,24 @@ class AutoencoderKL(pl.LightningModule):
     def configure_optimizers(self):
         lr = self.learning_rate
 
-        opt_ae = torch.optim.Adam(list(self.encoder.parameters()) +
-                                list(self.decoder.parameters()) +
-                                list(self.quant_conv.parameters()) +
-                                list(self.post_quant_conv.parameters()) +
-                                list(self.pre_layer_1.parameters()) +         
-                                list(self.pre_layer_2.parameters()) +    
-                                list(self.upsample_1.parameters()) +    
-                                list(self.upsample_2.parameters()),    
-                                # list(self.conv_rgb_gray.parameters()),        
-                                lr=lr, betas=(0.5, 0.9))
-        # self.log("learning_rate", lr, prog_bar=True)
+        opt_ae = torch.optim.Adam(
+            list(self.encoder.parameters()) +
+            list(self.decoder.parameters()) +
+            list(self.quant_conv.parameters()) +
+            list(self.post_quant_conv.parameters()) +
+            list(self.downsample_1.parameters()) +
+            list(self.downsample_2.parameters()) +
+            list(self.upsample_1.parameters()) +
+            list(self.upsample_2.parameters()) +
+            list(self.pre_bottleneck_1.parameters()) +   
+            #list(self.pre_bottleneck_2.parameters()) +   
+            list(self.post_bottleneck_1.parameters()),
+            #list(self.post_bottleneck_2.parameters()), 
+            lr=lr, betas=(0.5, 0.9)
+        )
+        
         return opt_ae
+
 
     def get_last_layer(self):
         return self.upsample_2.weight

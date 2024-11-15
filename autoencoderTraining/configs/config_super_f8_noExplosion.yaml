@@ -33,18 +33,17 @@ model:
 data:
   target: CustomImagePickleDataset
   params:
-    batch_size: 5
+    batch_size: 3
     num_workers: 5
-    persistent_workers: True
     train:
       target: CustomImagePickleDataset
       params:
-        data_root: /work/10122/thomaswynn7394/ls6/MuaSlices/train
+        data_root: /workspace/thomas/latentDiffusion/autoencoderTraining/data/MuaSlices/train
         size: 1024
     validation:
       target: CustomImagePickleDataset
       params:
-        data_root: /work/10122/thomaswynn7394/ls6/MuaSlices/val
+        data_root: /workspace/thomas/latentDiffusion/autoencoderTraining/data/MuaSlices/val
         size: 1024
 
 lightning:

@@ -113,7 +113,7 @@ class AutoencoderKL(pl.LightningModule):
     def encode(self, x):
         x = self.preprocess(x)
         h = self.encoder(x)
-        print(f"Range of x after self.encoder: min = {h.min().item()}, max = {h.max().item()}")
+        # print(f"Range of x after self.encoder: min = {h.min().item()}, max = {h.max().item()}")
         moments = self.quant_conv(h)
         posterior = DiagonalGaussianDistribution(moments)
         print(posterior.sample().shape)

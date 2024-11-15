@@ -1,9 +1,9 @@
 model:
   base_learning_rate: 1.0e-05
-  target: ldm.models.autoencoder_noExplosion.AutoencoderKL
+  # target: ldm.models.autoencoder_noExplosion.AutoencoderKL
   params:
     monitor: val/rec_loss
-    ckpt_path: /workspace/thomas/latentDiffusion/autoencoderTraining/kl-f8.ckpt
+    ckpt_path: /workspace/thomas/latentDiffusion/autoencoderTraining/weights/no_explosion_10.ckpt
     #ckpt_path: /workspace/thomas/latentDiffusion/autoencoderTraining/lightning_logs/version_166/checkpoints/epoch=0-step=9999.ckpt
     # ckpt_path : /workspace/thomas/latentDiffusion/epoch=1-step=6668.ckpt
     embed_dim: 4
@@ -37,12 +37,12 @@ data:
     train:
       target: CustomImagePickleDataset
       params:
-        data_root: /workspace/thomas/MuaSlices/train
+        data_root: /workspace/thomas/latentDiffusion/autoencoderTraining/data/MuaSlices/train
         size: 1024
     validation:
       target: CustomImagePickleDataset
       params:
-        data_root: /workspace/thomas/MuaSlices/val
+        data_root: /workspace/thomas/latentDiffusion/autoencoderTraining/data/MuaSlices/val
         size: 1024
 
 lightning:

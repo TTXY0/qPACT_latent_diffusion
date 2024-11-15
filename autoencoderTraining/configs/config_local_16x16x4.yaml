@@ -1,13 +1,13 @@
-logfile : /scratch/10122/thomaswynn7394/latentDiffusion/autoencoderTraining/tb_logs
+logfile: /workspace/thomas/latentDiffusion/autoencoderTraining/tb_logs
 model:
-  base_learning_rate: 1.0e-04
+  base_learning_rate: 1.0e-05
   target: ldm.models.autoencoder.AutoencoderKL
   params:
     monitor: val/rec_loss
-    ckpt_path: /scratch/10122/thomaswynn7394/latentDiffusion/autoencoderTraining/kl-f16.ckpt
-    # ckpt_path: /scratch/10122/thomaswynn7394/latentDiffusion/autoencoderTraining/lightning_logs/version_1910058/checkpoints/epoch=9-step=33340.ckpt
-    #ckpt_path: /scratch/10122/thomaswynn7394/latentDiffusion/autoencoderTraining/lightning_logs/version_9_epochs/checkpoints/epoch=9-step=33340.ckpt
-    embed_dim: 16
+    ckpt_path: /workspace/thomas/latentDiffusion/autoencoderTraining/weights/kl-f8.ckpt
+    #ckpt_path: /workspace/thomas/latentDiffusion/autoencoderTraining/lightning_logs/version_166/checkpoints/epoch=0-step=9999.ckpt
+    # ckpt_path : /workspace/thomas/latentDiffusion/epoch=1-step=6668.ckpt
+    embed_dim: 4 # Not used
     lossconfig:
       target: loss.MSSSIM_Loss
       params:
@@ -16,14 +16,18 @@ model:
         disc_weight: 0
     ddconfig:
       double_z: true
-      z_channels: 16
+      z_channels: 4 #Not used
       resolution: 256
       in_channels: 3
       out_ch: 3
       ch: 128
-      ch_mult: [ 1,1,2,2,4]
+      ch_mult:
+      - 1
+      - 2
+      - 4
+      - 4
       num_res_blocks: 2
-      attn_resolutions: [16]
+      attn_resolutions: []
       dropout: 0.0
 
 data:
@@ -47,11 +51,11 @@ lightning:
     image_logger:
       target: main.ImageLogger
       params:
-        batch_frequency: 2000
+        batch_frequency: 1000
         max_images: 8
         increase_log_steps: True
   trainer:
-    max_epochs: 15
-    gpus: 3
+    max_epochs: 10
+    gpus: 1
     precision: 32
-    log_every_n_steps: 100
+    log_every_n_steps: 50

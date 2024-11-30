@@ -4,7 +4,7 @@ import torch
 import pickle
 import numpy as np
 import matplotlib.pyplot as plt
-from models.autoencoder_no_explosion import AutoencoderKL as no_explosion
+from models.autoencoder import AutoencoderKL
 
 
 def load_image(file_path):
@@ -63,12 +63,12 @@ def show_images(original, untrained_reconstructed, trained_reconstructed, save_p
 if __name__ == "__main__":
 
     # Load the model configuration
-    config_path = '/workspace/thomas/latentDiffusion/autoencoderTraining/configs/config_local_f8_noExplosion.yaml'
+    config_path = '/workspace/thomas/latentDiffusion/autoencoderTraining/configs/config_local_f8.yaml'
     with open(config_path, 'r') as file:
         config = yaml.safe_load(file)
 
     # Initialize the model
-    model = no_explosion(**config['model']['params'])
+    model = AutoencoderKL(**config['model']['params'])
     model.eval()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
@@ -85,12 +85,12 @@ if __name__ == "__main__":
         original_image = original_image.to(device)
         
         # Load weights for untrained reconstruction
-        model.init_from_ckpt("/workspace/thomas/latentDiffusion/autoencoderTraining/weights/explosion_10.ckpt")
+        model.init_from_ckpt("/workspace/thomas/latentDiffusion/autoencoderTraining/weights/kl-f8.ckpt")
         with torch.no_grad():
             untrained_reconstructed, _ = model(original_image)
 
         # Load weights for trained reconstruction
-        model.init_from_ckpt("/workspace/thomas/latentDiffusion/autoencoderTraining/weights/no_explosion_10.ckpt")
+        model.init_from_ckpt("/workspace/thomas/latentDiffusion/autoencoderTraining/tb_logs/autoencoder/vanilla_gradient_loss/checkpoints/epoch=6-step=46668.ckpt")
         with torch.no_grad():
             trained_reconstructed, _ = model(original_image)
 

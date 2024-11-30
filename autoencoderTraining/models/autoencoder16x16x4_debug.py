@@ -70,11 +70,11 @@ class AutoencoderKL(pl.LightningModule):
             self.upsample_2.weight.data.fill_(1/32)
 
             # pre-bottleneck layers
-            self.pre_bottleneck_1.weight.data.fill_(1/4)
+            self.pre_bottleneck_1.weight.data.fill_(1/32)
             #self.pre_bottleneck_2.weight.data.fill_(1/4)
             
             # post-bottleneck layers
-            self.post_bottleneck_1.weight.data.fill_(1/4)
+            self.post_bottleneck_1.weight.data.fill_(1/16)
             #self.post_bottleneck_2.weight.data.fill_(1/4)
 
         
@@ -140,15 +140,15 @@ class AutoencoderKL(pl.LightningModule):
         x = self.preprocess(x)
         h = self.encoder(x)
         h = self.pre_bottleneck(h)
-        # moments = self.quant_conv(h)
+        moments = self.quant_conv(h)
         # print(f"Shape of h : {h.shape}")
-        posterior = DiagonalGaussianDistribution(h)
+        posterior = DiagonalGaussianDistribution(moments)
         print(posterior.sample().shape)
         return posterior
 
     def decode(self, z):
         print(f"Shape of z : {z.shape}")
-        # z = self.post_quant_conv(z)
+        z = self.post_quant_conv(z)
         z = self.post_bottleneck(z)
         dec = self.decoder(z)
         dec = self.post_process(dec)

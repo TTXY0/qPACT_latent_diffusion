@@ -23,7 +23,7 @@ from pytorch_lightning.callbacks import Callback
 import torch.nn.functional as F
 import torch
 # from torch.optim.lr_scheduler import LambdaLR
-VER_NAME = "16x16x4"
+VER_NAME = "16x16x4_v2"
 class CustomImagePickleDataset(Dataset):
     def __init__(self, data_root, size=512):
         if not os.path.exists(data_root):
@@ -31,6 +31,25 @@ class CustomImagePickleDataset(Dataset):
         self.data_root = data_root
         self.file_list = os.listdir(data_root)
         self.size = size
+        self.max = None
+        self.min = None
+        self._get_max_min()
+    
+    def _get_max_min(self):
+        max_value = float('-inf')
+        min_value = float('inf')
+        for file_name in self.file_list:
+            # print(f"working {file_name}")
+            file_path = os.path.join(self.data_root, file_name)
+            with open(file_path, 'rb') as f:
+                image = pickle.load(f).numpy()  # Assuming the pickled file contains a PyTorch tensor
+
+            max_value = max(max_value, image.max())
+            min_value = min(min_value, image.min())
+
+        self.max = max_value
+        self.min = min_value
+        print(f"Minimum, Maximum of dataset {self.min, self.max}")
 
     def __len__(self):
         return len(self.file_list)
@@ -42,7 +61,7 @@ class CustomImagePickleDataset(Dataset):
 
         image = image.numpy()
         
-        image = (image - image.min()) / (image.max() - image.min())
+        image = (image - self.min) / (self.max - self.min)
         
         # Shift to [-1, 1]
         image = 2 * image - 1

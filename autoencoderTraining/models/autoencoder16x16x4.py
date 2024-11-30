@@ -70,11 +70,11 @@ class AutoencoderKL(pl.LightningModule):
             self.upsample_2.weight.data.fill_(1/32)
 
             # pre-bottleneck layers
-            self.pre_bottleneck_1.weight.data.fill_(1/4)
+            self.pre_bottleneck_1.weight.data.fill_(1/32)
             #self.pre_bottleneck_2.weight.data.fill_(1/4)
             
             # post-bottleneck layers
-            self.post_bottleneck_1.weight.data.fill_(1/4)
+            self.post_bottleneck_1.weight.data.fill_(1/16)
             #self.post_bottleneck_2.weight.data.fill_(1/4)
 
         
@@ -97,42 +97,42 @@ class AutoencoderKL(pl.LightningModule):
             self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
     
     def preprocess(self, x):
-        #print(f"Range of x before pre_layer_1: min = {x.min().item()}, max = {x.max().item()}")
+        # print(f"Range of x before pre_layer_1: min = {x.min().item()}, max = {x.max().item()}")
         
         x = self.downsample_1(x)
         
-        #print(f"Range of x after pre_layer_1: min = {x.min().item()}, max = {x.max().item()}")
+        # print(f"Range of x after pre_layer_1: min = {x.min().item()}, max = {x.max().item()}")
         x = self.downsample_2(x)
         
-        #print(f"Range of x after pre_layer_2: min = {x.min().item()}, max = {x.max().item()}")
+        # print(f"Range of x after pre_layer_2: min = {x.min().item()}, max = {x.max().item()}")
 
         return x
 
     def pre_bottleneck(self, x):
         #print(f"Range of x before pre_bottleneck_1: min = {x.min().item()}, max = {x.max().item()}")
         x = self.pre_bottleneck_1(x)
-        #print(f"Range of x after pre_bottleneck_1: min = {x.min().item()}, max = {x.max().item()}")
+        # print(f"Range of x after pre_bottleneck_1: min = {x.min().item()}, max = {x.max().item()}")
         #x = self.pre_bottleneck_2(x)
         #print(f"Range of x after pre_bottleneck_2: min = {x.min().item()}, max = {x.max().item()}")
         return x
 
     def post_bottleneck(self,x): 
-        #print(f"Range of x before post_bottleneck_1: min = {x.min().item()}, max = {x.max().item()}")
+        # print(f"Range of x before post_bottleneck_1: min = {x.min().item()}, max = {x.max().item()}")
         x = self.post_bottleneck_1(x)
-        #print(f"Range of x after post_bottleneck_1: min = {x.min().item()}, max = {x.max().item()}")
+        # print(f"Range of x after post_bottleneck_1: min = {x.min().item()}, max = {x.max().item()}")
         #x = self.post_bottleneck_2(x)
         #print(f"Range of x after post_bottleneck_2: min = {x.min().item()}, max = {x.max().item()}")
         return x
 
     def post_process(self, x):
-        #print(f"Range of x before upsample_1: min = {x.min().item()}, max = {x.max().item()}")
+        # print(f"Range of x before upsample_1: min = {x.min().item()}, max = {x.max().item()}")
         
         x = self.upsample_1(x)
         
-        #print(f"Range of x after upsample_1: min = {x.min().item()}, max = {x.max().item()}")
+        # print(f"Range of x after upsample_1: min = {x.min().item()}, max = {x.max().item()}")
 
         x = self.upsample_2(x)
-        #print(f"Range of x after upsample_2: min = {x.min().item()}, max = {x.max().item()}")
+        # print(f"Range of x after upsample_2: min = {x.min().item()}, max = {x.max().item()}")
 
         return x
     
@@ -140,15 +140,15 @@ class AutoencoderKL(pl.LightningModule):
         x = self.preprocess(x)
         h = self.encoder(x)
         h = self.pre_bottleneck(h)
-        # moments = self.quant_conv(h)
+        moments = self.quant_conv(h)
         # print(f"Shape of h : {h.shape}")
-        posterior = DiagonalGaussianDistribution(h)
-        #print(posterior.sample().shape)
+        posterior = DiagonalGaussianDistribution(moments)
+        # print(posterior.sample().shape)
         return posterior
 
     def decode(self, z):
-        #print(f"Shape of z : {z.shape}")
-        # z = self.post_quant_conv(z)
+        # print(f"Shape of z : {z.shape}")
+        z = self.post_quant_conv(z)
         z = self.post_bottleneck(z)
         dec = self.decoder(z)
         dec = self.post_process(dec)
@@ -254,9 +254,7 @@ class AutoencoderKL(pl.LightningModule):
             list(self.upsample_1.parameters()) +
             list(self.upsample_2.parameters()) +
             list(self.pre_bottleneck_1.parameters()) +   
-            #list(self.pre_bottleneck_2.parameters()) +   
             list(self.post_bottleneck_1.parameters()),
-            #list(self.post_bottleneck_2.parameters()), 
             lr=lr, betas=(0.5, 0.9)
         )
         

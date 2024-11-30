@@ -33,12 +33,12 @@ class AutoencoderKL(pl.LightningModule):
         # self.upsample = torch.nn.ConvTranspose2d(in_channels=3, out_channels=1, kernel_size=4, stride=4, padding=0, bias=False)
         #Consider overlap in convolution
         # Two 2x downsampling layers
-        self.pre_layer_1 = torch.nn.Conv2d(1, 32, kernel_size=2, stride=2, padding=0, bias=False)
-        self.pre_layer_2 = torch.nn.Conv2d(32, 3, kernel_size=2, stride=2, padding=0, bias=False)
+        self.pre_layer_1 = torch.nn.Conv2d(1, 3, kernel_size=2, stride=2, padding=0, bias=False)
+        self.pre_layer_2 = torch.nn.Conv2d(3, 3, kernel_size=2, stride=2, padding=0, bias=False)
 
         #  upsampling layers
-        self.upsample_1 = torch.nn.ConvTranspose2d(3, 32, kernel_size=2, stride=2, padding=0, bias=False)
-        self.upsample_2 = torch.nn.ConvTranspose2d(32, 1, kernel_size=2, stride=2, padding=0, bias=False)
+        self.upsample_1 = torch.nn.ConvTranspose2d(3, 3, kernel_size=2, stride=2, padding=0, bias=False)
+        self.upsample_2 = torch.nn.ConvTranspose2d(3, 1, kernel_size=2, stride=2, padding=0, bias=False)
 
         
         with torch.no_grad(): 
@@ -113,10 +113,10 @@ class AutoencoderKL(pl.LightningModule):
     def encode(self, x):
         x = self.preprocess(x)
         h = self.encoder(x)
-        print(f"Range of x after self.encoder: min = {h.min().item()}, max = {h.max().item()}")
+        #print(f"Range of x after self.encoder: min = {h.min().item()}, max = {h.max().item()}")
         moments = self.quant_conv(h)
         posterior = DiagonalGaussianDistribution(moments)
-        print(posterior.sample().shape)
+        #print(posterior.sample().shape)
         return posterior
 
     def decode(self, z):

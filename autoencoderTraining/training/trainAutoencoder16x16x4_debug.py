@@ -31,6 +31,25 @@ class CustomImagePickleDataset(Dataset):
         self.data_root = data_root
         self.file_list = os.listdir(data_root)
         self.size = size
+        self.max = None
+        self.min = None
+        self._get_max_min()
+    
+    def _get_max_min(self):
+        max_value = float('-inf')
+        min_value = float('inf')
+        for file_name in self.file_list:
+            print(f"working {file_name}")
+            file_path = os.path.join(self.data_root, file_name)
+            with open(file_path, 'rb') as f:
+                image = pickle.load(f).numpy()  # Assuming the pickled file contains a PyTorch tensor
+
+            max_value = max(max_value, image.max())
+            min_value = min(min_value, image.min())
+
+        self.max = max_value
+        self.min = min_value
+        print(self.min, self.max)
 
     def __len__(self):
         return len(self.file_list)
@@ -42,7 +61,7 @@ class CustomImagePickleDataset(Dataset):
 
         image = image.numpy()
         
-        image = (image - image.min()) / (image.max() - image.min())
+        image = (image - self.min) / (self.max - self.min)
         
         # Shift to [-1, 1]
         image = 2 * image - 1

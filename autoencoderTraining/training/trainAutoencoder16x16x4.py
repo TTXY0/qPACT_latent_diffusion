@@ -148,7 +148,7 @@ if __name__ == "__main__":
     config_paths = {
         'super': '',
         'local': '/workspace/thomas/latentDiffusion/autoencoderTraining/configs/config_local_16x16x4.yaml',
-        'bevo' : '' # Not set
+        'bevo' : '/home/twynn/Desktop/latentDiffusion/autoencoderTraining/configs/config_bevo_16x16x4.yaml' # Not set
     }
     
     config_path = config_paths.get(ENV, config_paths['local'])

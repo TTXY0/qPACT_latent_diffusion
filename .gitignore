@@ -1,4 +1,6 @@
 autoencoderTraining/model.ckpt
+autoencoderTraining/logs
+autoencoderTraining/figures
 autoencoderTraining/kl-f8.ckpt
 autoencoderTraining/tb_logs
 taming/modules/autoencoder/lpips/vgg.pth

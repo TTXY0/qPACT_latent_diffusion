@@ -4,7 +4,7 @@ import torch
 import pickle
 import numpy as np
 import matplotlib.pyplot as plt
-from models.autoencoder import AutoencoderKL
+from autoencoderTraining.models.autoencoder_downsample import AutoencoderKL
 
 
 def load_image(file_path):

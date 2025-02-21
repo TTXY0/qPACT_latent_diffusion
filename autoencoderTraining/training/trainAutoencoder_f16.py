@@ -9,7 +9,7 @@ from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, LearningRateMonitor
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from models.autoencoder import AutoencoderKL
+from autoencoderTraining.models.autoencoder_downsample import AutoencoderKL
 import pickle
 import numpy as np
 import matplotlib.pyplot as plt

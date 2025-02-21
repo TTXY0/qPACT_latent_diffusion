@@ -9,7 +9,7 @@ model:
     # ckpt_path : /workspace/thomas/latentDiffusion/epoch=1-step=6668.ckpt
     embed_dim: 4
     lossconfig:
-      target: loss.MSSSIM_Loss
+      target: losses.loss.MSSSIM_Loss
       params:
         disc_start: 100000000000000
         kl_weight: 1.0e-06

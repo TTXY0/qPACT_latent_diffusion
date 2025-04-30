@@ -95,17 +95,6 @@ lightning:
         batch_frequency: 3000  # Logs every 3000 batches
         max_images: 4
         clamp: true
-        log_images_kwargs:
-          N: 8  # Number of images to log
-          n_row: 4  # Number of rows in the grid for logging
-          sample: true  # Whether to sample images or not
-          ddim_steps: 200  # Number of DDIM steps
-          ddim_eta: 1.0  # DDIM eta parameter
-          quantize_denoised: true  # Whether to quantize the denoised images
-          inpaint: false  # Whether to perform inpainting
-          plot_denoise_rows: false  # Whether to plot denoising steps
-          plot_progressive_rows: true  # Whether to plot progressive denoising rows
-          plot_diffusion_rows: true  # Whether to plot diffusion steps
 
   trainer:
     gpus : "0"

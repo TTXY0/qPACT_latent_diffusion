@@ -11,7 +11,6 @@ from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.util import instantiate_from_config
 import matplotlib.pyplot as plt
 
-rescale = lambda x: (x + 1.) / 2.
 
 def custom_to_pil(x):
     # Convert tensor to numpy array
@@ -40,17 +39,12 @@ def custom_to_pil(x):
 
 
 def custom_to_np(x):
-    x = x.detach().cpu()
-    x = (x + 1) / 2  # Normalize to [0, 1]
-
-    # Apply global min-max scaling
-    global_min = -5.315805745492602
-    global_max = 1.4058262706509637
-    x = (x * (global_max - global_min)) + global_min
-
-    x = x.permute(0, 2, 3, 1).contiguous()
-    return x
-
+    # saves the batch in adm style as in https://github.com/openai/guided-diffusion/blob/main/scripts/image_sample.py
+    sample = x.detach().cpu()
+    sample = ((sample + 1) * 127.5).clamp(0, 255).to(torch.uint8)
+    sample = sample.permute(0, 2, 3, 1)
+    sample = sample.contiguous()
+    return sample
 
 
 def logs2pil(logs, keys=["sample"]):
@@ -81,7 +75,7 @@ def convsample(model, shape, return_intermediates=True,
                                    return_intermediates=return_intermediates, verbose=verbose)
     else:
         return model.progressive_denoising(
-            None, [10,4,16,16], verbose=True
+            None, shape, verbose=True
         )
 
 
@@ -101,15 +95,10 @@ def make_convolutional_sample(model, batch_size, vanilla=False, custom_steps=Non
 
     log = dict()
 
-    # shape = [batch_size,
-    #          model.model.diffusion_model.in_channels,
-    #          model.model.diffusion_model.image_size,
-    #          model.model.diffusion_model.image_size]
-    # TODO : donthardcode 
     shape = [batch_size,
-            4,
-            16,
-            16]
+             model.model.diffusion_model.in_channels,
+             model.model.diffusion_model.image_size,
+             model.model.diffusion_model.image_size]
 
     with model.ema_scope("Plotting"):
         t0 = time.time()

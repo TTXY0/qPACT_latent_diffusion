@@ -24,7 +24,6 @@ from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianD
 from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, AutoencoderKL
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
 from ldm.models.diffusion.ddim import DDIMSampler
-
 from models.autoencoder_linear_compression import CompressedGaussianDistribution
 
 
@@ -83,6 +82,7 @@ class DDPM(pl.LightningModule):
         self.log_every_t = log_every_t
         self.first_stage_key = first_stage_key
         self.image_size = image_size  # try conv?
+        print("line 85 ddpm self.imagesize : " , self.image_size)
         self.channels = channels
         self.use_positional_encodings = use_positional_encodings
         self.model = DiffusionWrapper(unet_config, conditioning_key)
@@ -267,7 +267,7 @@ class DDPM(pl.LightningModule):
         return img
 
     @torch.no_grad()
-    def sample(self, batch_size=16, return_intermediates=False):
+    def sample(self, batch_size=3, return_intermediates=False):
         image_size = self.image_size
         channels = self.channels
         return self.p_sample_loop((batch_size, channels, image_size, image_size),
@@ -279,6 +279,7 @@ class DDPM(pl.LightningModule):
                 extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise)
 
     def get_loss(self, pred, target, mean=True):
+        #target = torch.transpose(target, 0, 1) #should we transpose target or model_out? # this way, our target is shape [batch, 1024]
         if self.loss_type == 'l1':
             loss = (target - pred).abs()
             if mean:
@@ -293,39 +294,46 @@ class DDPM(pl.LightningModule):
 
         return loss
 
-    def p_losses(self, x_start, t, noise=None):
-        noise = default(noise, lambda: torch.randn_like(x_start))
-        x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
-        model_out = self.model(x_noisy, t)
+    def p_losses(self, x_start, cond, t, noise=None):
+            noise = default(noise, lambda: torch.randn_like(x_start))
+            x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+            model_output = self.apply_model(x_noisy, t, cond)
 
-        loss_dict = {}
-        if self.parameterization == "eps":
-            target = noise
-        elif self.parameterization == "x0":
-            target = x_start
-        else:
-            raise NotImplementedError(f"Paramterization {self.parameterization} not yet supported")
+            loss_dict = {}
+            prefix = 'train' if self.training else 'val'
 
-        loss = self.get_loss(model_out, target, mean=False).mean(dim=[1, 2, 3])
+            if self.parameterization == "x0":
+                target = x_start
+            elif self.parameterization == "eps":
+                target = noise
+            else:
+                raise NotImplementedError()
 
-        log_prefix = 'train' if self.training else 'val'
+            loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
+            loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean()})
 
-        loss_dict.update({f'{log_prefix}/loss_simple': loss.mean()})
-        loss_simple = loss.mean() * self.l_simple_weight
+            logvar_t = self.logvar[t].to(self.device)
+            loss = loss_simple / torch.exp(logvar_t) + logvar_t
+            # loss = loss_simple / torch.exp(self.logvar) + self.logvar
+            if self.learn_logvar:
+                loss_dict.update({f'{prefix}/loss_gamma': loss.mean()})
+                loss_dict.update({'logvar': self.logvar.data.mean()})
 
-        loss_vlb = (self.lvlb_weights[t] * loss).mean()
-        loss_dict.update({f'{log_prefix}/loss_vlb': loss_vlb})
+            loss = self.l_simple_weight * loss.mean()
 
-        loss = loss_simple + self.original_elbo_weight * loss_vlb
+            loss_vlb = self.get_loss(model_output, target, mean=False).mean(dim=(1, 2, 3))
+            loss_vlb = (self.lvlb_weights[t] * loss_vlb).mean()
+            loss_dict.update({f'{prefix}/loss_vlb': loss_vlb})
+            loss += (self.original_elbo_weight * loss_vlb)
+            loss_dict.update({f'{prefix}/loss': loss})
 
-        loss_dict.update({f'{log_prefix}/loss': loss})
-
-        return loss, loss_dict
+            return loss, loss_dict
 
     def forward(self, x, *args, **kwargs):
         # b, c, h, w, device, img_size, = *x.shape, x.device, self.image_size
         # assert h == img_size and w == img_size, f'height and width of image must be {img_size}'
         t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=self.device).long()
+        print("shape of t at 334" , t.shape)
         return self.p_losses(x, t, *args, **kwargs)
 
     def get_input(self, batch, k):
@@ -544,7 +552,7 @@ class LatentDiffusion(DDPM):
     def get_first_stage_encoding(self, encoder_posterior):
         if isinstance(encoder_posterior, DiagonalGaussianDistribution):
             z = encoder_posterior.sample()
-        elif isinstance(encoder_posterior, CompressedGaussianDistribution):
+        elif isinstance(encoder_posterior, CompressedGaussianDistribution):  # ADD THIS
             z = encoder_posterior.sample()
         elif isinstance(encoder_posterior, torch.Tensor):
             z = encoder_posterior
@@ -557,8 +565,6 @@ class LatentDiffusion(DDPM):
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
                 c = self.cond_stage_model.encode(c)
                 if isinstance(c, DiagonalGaussianDistribution):
-                    c = c.mode()
-                if isinstance(c, CompressedGaussianDistribution):
                     c = c.mode()
             else:
                 c = self.cond_stage_model(c)
@@ -604,57 +610,57 @@ class LatentDiffusion(DDPM):
             weighting = weighting * L_weighting
         return weighting
 
-    def get_fold_unfold(self, x, kernel_size, stride, uf=1, df=1):  # todo load once not every time, shorten code
-        """
-        :param x: img of size (bs, c, h, w)
-        :return: n img crops of size (n, bs, c, kernel_size[0], kernel_size[1])
-        """
-        bs, nc, h, w = x.shape
+    # def get_fold_unfold(self, x, kernel_size, stride, uf=1, df=1):  # todo load once not every time, shorten code
+    #     """
+    #     :param x: img of size (bs, c, h, w)
+    #     :return: n img crops of size (n, bs, c, kernel_size[0], kernel_size[1])
+    #     """
+    #     bs, nc, h, w = x.shape
+    #     print("get_fold_unfold being called")
+    #     # number of crops in image
+    #     Ly = (h - kernel_size[0]) // stride[0] + 1
+    #     Lx = (w - kernel_size[1]) // stride[1] + 1
 
-        # number of crops in image
-        Ly = (h - kernel_size[0]) // stride[0] + 1
-        Lx = (w - kernel_size[1]) // stride[1] + 1
+    #     if uf == 1 and df == 1:
+    #         fold_params = dict(kernel_size=kernel_size, dilation=1, padding=0, stride=stride)
+    #         unfold = torch.nn.Unfold(**fold_params)
 
-        if uf == 1 and df == 1:
-            fold_params = dict(kernel_size=kernel_size, dilation=1, padding=0, stride=stride)
-            unfold = torch.nn.Unfold(**fold_params)
+    #         fold = torch.nn.Fold(output_size=x.shape[2:], **fold_params)
 
-            fold = torch.nn.Fold(output_size=x.shape[2:], **fold_params)
+    #         weighting = self.get_weighting(kernel_size[0], kernel_size[1], Ly, Lx, x.device).to(x.dtype)
+    #         normalization = fold(weighting).view(1, 1, h, w)  # normalizes the overlap
+    #         weighting = weighting.view((1, 1, kernel_size[0], kernel_size[1], Ly * Lx))
 
-            weighting = self.get_weighting(kernel_size[0], kernel_size[1], Ly, Lx, x.device).to(x.dtype)
-            normalization = fold(weighting).view(1, 1, h, w)  # normalizes the overlap
-            weighting = weighting.view((1, 1, kernel_size[0], kernel_size[1], Ly * Lx))
+    #     elif uf > 1 and df == 1:
+    #         fold_params = dict(kernel_size=kernel_size, dilation=1, padding=0, stride=stride)
+    #         unfold = torch.nn.Unfold(**fold_params)
 
-        elif uf > 1 and df == 1:
-            fold_params = dict(kernel_size=kernel_size, dilation=1, padding=0, stride=stride)
-            unfold = torch.nn.Unfold(**fold_params)
+    #         fold_params2 = dict(kernel_size=(kernel_size[0] * uf, kernel_size[0] * uf),
+    #                             dilation=1, padding=0,
+    #                             stride=(stride[0] * uf, stride[1] * uf))
+    #         fold = torch.nn.Fold(output_size=(x.shape[2] * uf, x.shape[3] * uf), **fold_params2)
 
-            fold_params2 = dict(kernel_size=(kernel_size[0] * uf, kernel_size[0] * uf),
-                                dilation=1, padding=0,
-                                stride=(stride[0] * uf, stride[1] * uf))
-            fold = torch.nn.Fold(output_size=(x.shape[2] * uf, x.shape[3] * uf), **fold_params2)
+    #         weighting = self.get_weighting(kernel_size[0] * uf, kernel_size[1] * uf, Ly, Lx, x.device).to(x.dtype)
+    #         normalization = fold(weighting).view(1, 1, h * uf, w * uf)  # normalizes the overlap
+    #         weighting = weighting.view((1, 1, kernel_size[0] * uf, kernel_size[1] * uf, Ly * Lx))
 
-            weighting = self.get_weighting(kernel_size[0] * uf, kernel_size[1] * uf, Ly, Lx, x.device).to(x.dtype)
-            normalization = fold(weighting).view(1, 1, h * uf, w * uf)  # normalizes the overlap
-            weighting = weighting.view((1, 1, kernel_size[0] * uf, kernel_size[1] * uf, Ly * Lx))
+    #     elif df > 1 and uf == 1:
+    #         fold_params = dict(kernel_size=kernel_size, dilation=1, padding=0, stride=stride)
+    #         unfold = torch.nn.Unfold(**fold_params)
 
-        elif df > 1 and uf == 1:
-            fold_params = dict(kernel_size=kernel_size, dilation=1, padding=0, stride=stride)
-            unfold = torch.nn.Unfold(**fold_params)
+    #         fold_params2 = dict(kernel_size=(kernel_size[0] // df, kernel_size[0] // df),
+    #                             dilation=1, padding=0,
+    #                             stride=(stride[0] // df, stride[1] // df))
+    #         fold = torch.nn.Fold(output_size=(x.shape[2] // df, x.shape[3] // df), **fold_params2)
 
-            fold_params2 = dict(kernel_size=(kernel_size[0] // df, kernel_size[0] // df),
-                                dilation=1, padding=0,
-                                stride=(stride[0] // df, stride[1] // df))
-            fold = torch.nn.Fold(output_size=(x.shape[2] // df, x.shape[3] // df), **fold_params2)
+    #         weighting = self.get_weighting(kernel_size[0] // df, kernel_size[1] // df, Ly, Lx, x.device).to(x.dtype)
+    #         normalization = fold(weighting).view(1, 1, h // df, w // df)  # normalizes the overlap
+    #         weighting = weighting.view((1, 1, kernel_size[0] // df, kernel_size[1] // df, Ly * Lx))
 
-            weighting = self.get_weighting(kernel_size[0] // df, kernel_size[1] // df, Ly, Lx, x.device).to(x.dtype)
-            normalization = fold(weighting).view(1, 1, h // df, w // df)  # normalizes the overlap
-            weighting = weighting.view((1, 1, kernel_size[0] // df, kernel_size[1] // df, Ly * Lx))
+    #     else:
+    #         raise NotImplementedError
 
-        else:
-            raise NotImplementedError
-
-        return fold, unfold, normalization, weighting
+    #     return fold, unfold, normalization, weighting
 
     @torch.no_grad()
     def get_input(self, batch, k, return_first_stage_outputs=False, force_c_encode=False,
@@ -663,10 +669,10 @@ class LatentDiffusion(DDPM):
         if bs is not None:
             x = x[:bs]
         x = x.to(self.device)
-        encoder_posterior = self.encode_first_stage(x)
-        z = self.get_first_stage_encoding(encoder_posterior).detach()
+        encoder_posterior = self.encode_first_stage(x) #<class 'models.autoencoder_linear_compression.CompressedGaussianDistribution'>
+        z = self.get_first_stage_encoding(encoder_posterior).detach() # <class 'torch.Tensor'>
 
-        if self.model.conditioning_key is not None:
+        if self.model.conditioning_key is not None: # False
             if cond_key is None:
                 cond_key = self.cond_stage_key
             if cond_key != self.first_stage_key:
@@ -702,171 +708,220 @@ class LatentDiffusion(DDPM):
                 c = {'pos_x': pos_x, 'pos_y': pos_y}
         out = [z, c]
         if return_first_stage_outputs:
+            #z = torch.transpose(z, 0, 1)
             xrec = self.decode_first_stage(z)
             out.extend([x, xrec])
         if return_original_cond:
             out.append(xc)
-        return out
+        return out # [3,4, 16,16]
 
     @torch.no_grad()
     def decode_first_stage(self, z, predict_cids=False, force_not_quantize=False):
+        #print(f"decode_first_stage input z shape: {z.shape}")  # Debugging
+        
         if predict_cids:
-            if z.dim() == 4:
+            if z.dim() == 2:  # Since z is [batch, L]
                 z = torch.argmax(z.exp(), dim=1).long()
             z = self.first_stage_model.quantize.get_codebook_entry(z, shape=None)
-            z = rearrange(z, 'b h w c -> b c h w').contiguous()
 
-        z = 1. / self.scale_factor * z
+        # Scale factor adjustment (if applicable)
+        z = 1. / self.scale_factor * z  
 
+        # If "split_input_params" exists, we need to make sure it's compatible with 1D
         if hasattr(self, "split_input_params"):
             if self.split_input_params["patch_distributed_vq"]:
-                ks = self.split_input_params["ks"]  # eg. (128, 128)
-                stride = self.split_input_params["stride"]  # eg. (64, 64)
-                uf = self.split_input_params["vqf"]
-                bs, nc, h, w = z.shape
-                if ks[0] > h or ks[1] > w:
-                    ks = (min(ks[0], h), min(ks[1], w))
-                    print("reducing Kernel")
+                raise NotImplementedError("Patch-based VQ is designed for images, not 1D vectors.")
 
-                if stride[0] > h or stride[1] > w:
-                    stride = (min(stride[0], h), min(stride[1], w))
-                    print("reducing stride")
-
-                fold, unfold, normalization, weighting = self.get_fold_unfold(z, ks, stride, uf=uf)
-
-                z = unfold(z)  # (bn, nc * prod(**ks), L)
-                # 1. Reshape to img shape
-                z = z.view((z.shape[0], -1, ks[0], ks[1], z.shape[-1]))  # (bn, nc, ks[0], ks[1], L )
-
-                # 2. apply model loop over last dim
-                if isinstance(self.first_stage_model, VQModelInterface):
-                    output_list = [self.first_stage_model.decode(z[:, :, :, :, i],
-                                                                 force_not_quantize=predict_cids or force_not_quantize)
-                                   for i in range(z.shape[-1])]
-                else:
-
-                    output_list = [self.first_stage_model.decode(z[:, :, :, :, i])
-                                   for i in range(z.shape[-1])]
-
-                o = torch.stack(output_list, axis=-1)  # # (bn, nc, ks[0], ks[1], L)
-                o = o * weighting
-                # Reverse 1. reshape to img shape
-                o = o.view((o.shape[0], -1, o.shape[-1]))  # (bn, nc * ks[0] * ks[1], L)
-                # stitch crops together
-                decoded = fold(o)
-                decoded = decoded / normalization  # norm is shape (1, 1, h, w)
-                return decoded
-            else:
-                if isinstance(self.first_stage_model, VQModelInterface):
-                    return self.first_stage_model.decode(z, force_not_quantize=predict_cids or force_not_quantize)
-                else:
-                    return self.first_stage_model.decode(z)
-
+        # Directly pass z to the decoder without reshaping
+        if isinstance(self.first_stage_model, VQModelInterface):
+            return self.first_stage_model.decode(z, force_not_quantize=predict_cids or force_not_quantize)
         else:
-            if isinstance(self.first_stage_model, VQModelInterface):
-                return self.first_stage_model.decode(z, force_not_quantize=predict_cids or force_not_quantize)
-            else:
-                return self.first_stage_model.decode(z)
+            return self.first_stage_model.decode(z)
+
+    # def decode_first_stage(self, z, predict_cids=False, force_not_quantize=False):
+    #     if predict_cids:
+    #         if z.dim() == 4:
+    #             z = torch.argmax(z.exp(), dim=1).long()
+    #         z = self.first_stage_model.quantize.get_codebook_entry(z, shape=None)
+    #         z = rearrange(z, 'b h w c -> b c h w').contiguous()
+
+    #     z = 1. / self.scale_factor * z
+
+    #     if hasattr(self, "split_input_params"):
+    #         if self.split_input_params["patch_distributed_vq"]:
+    #             ks = self.split_input_params["ks"]  # eg. (128, 128)
+    #             stride = self.split_input_params["stride"]  # eg. (64, 64)
+    #             uf = self.split_input_params["vqf"]
+    #             bs, nc, h, w = z.shape
+    #             if ks[0] > h or ks[1] > w:
+    #                 ks = (min(ks[0], h), min(ks[1], w))
+    #                 print("reducing Kernel")
+
+    #             if stride[0] > h or stride[1] > w:
+    #                 stride = (min(stride[0], h), min(stride[1], w))
+    #                 print("reducing stride")
+
+    #             fold, unfold, normalization, weighting = self.get_fold_unfold(z, ks, stride, uf=uf)
+
+    #             z = unfold(z)  # (bn, nc * prod(**ks), L)
+    #             # 1. Reshape to img shape
+    #             z = z.view((z.shape[0], -1, ks[0], ks[1], z.shape[-1]))  # (bn, nc, ks[0], ks[1], L )
+
+    #             # 2. apply model loop over last dim
+    #             if isinstance(self.first_stage_model, VQModelInterface):
+    #                 output_list = [self.first_stage_model.decode(z[:, :, :, :, i],
+    #                                                              force_not_quantize=predict_cids or force_not_quantize)
+    #                                for i in range(z.shape[-1])]
+    #             else:
+
+    #                 output_list = [self.first_stage_model.decode(z[:, :, :, :, i])
+    #                                for i in range(z.shape[-1])]
+
+    #             o = torch.stack(output_list, axis=-1)  # # (bn, nc, ks[0], ks[1], L)
+    #             o = o * weighting
+    #             # Reverse 1. reshape to img shape
+    #             o = o.view((o.shape[0], -1, o.shape[-1]))  # (bn, nc * ks[0] * ks[1], L)
+    #             # stitch crops together
+    #             decoded = fold(o)
+    #             decoded = decoded / normalization  # norm is shape (1, 1, h, w)
+    #             return decoded
+    #         else:
+    #             if isinstance(self.first_stage_model, VQModelInterface):
+    #                 return self.first_stage_model.decode(z, force_not_quantize=predict_cids or force_not_quantize)
+    #             else:
+    #                 return self.first_stage_model.decode(z)
+
+    #     else:
+    #         if isinstance(self.first_stage_model, VQModelInterface):
+    #             return self.first_stage_model.decode(z, force_not_quantize=predict_cids or force_not_quantize)
+    #         else:
+    #             #z = torch.transpose(z, 0, 1)
+    #             return self.first_stage_model.decode(z)
 
     # same as above but without decorator
-    def differentiable_decode_first_stage(self, z, predict_cids=False, force_not_quantize=False):
-        if predict_cids:
-            if z.dim() == 4:
-                z = torch.argmax(z.exp(), dim=1).long()
-            z = self.first_stage_model.quantize.get_codebook_entry(z, shape=None)
-            z = rearrange(z, 'b h w c -> b c h w').contiguous()
+    
+    # def differentiable_decode_first_stage(self, z, predict_cids=False, force_not_quantize=False):
+    #     if predict_cids:
+    #         if z.dim() == 4:
+    #             z = torch.argmax(z.exp(), dim=1).long()
+    #         z = self.first_stage_model.quantize.get_codebook_entry(z, shape=None)
+    #         z = rearrange(z, 'b h w c -> b c h w').contiguous()
 
-        z = 1. / self.scale_factor * z
+    #     z = 1. / self.scale_factor * z
 
-        if hasattr(self, "split_input_params"):
-            if self.split_input_params["patch_distributed_vq"]:
-                ks = self.split_input_params["ks"]  # eg. (128, 128)
-                stride = self.split_input_params["stride"]  # eg. (64, 64)
-                uf = self.split_input_params["vqf"]
-                bs, nc, h, w = z.shape
-                if ks[0] > h or ks[1] > w:
-                    ks = (min(ks[0], h), min(ks[1], w))
-                    print("reducing Kernel")
+    #     if hasattr(self, "split_input_params"):
+    #         if self.split_input_params["patch_distributed_vq"]:
+    #             ks = self.split_input_params["ks"]  # eg. (128, 128)
+    #             stride = self.split_input_params["stride"]  # eg. (64, 64)
+    #             uf = self.split_input_params["vqf"]
+    #             bs, nc, h, w = z.shape
+    #             if ks[0] > h or ks[1] > w:
+    #                 ks = (min(ks[0], h), min(ks[1], w))
+    #                 print("reducing Kernel")
 
-                if stride[0] > h or stride[1] > w:
-                    stride = (min(stride[0], h), min(stride[1], w))
-                    print("reducing stride")
+    #             if stride[0] > h or stride[1] > w:
+    #                 stride = (min(stride[0], h), min(stride[1], w))
+    #                 print("reducing stride")
 
-                fold, unfold, normalization, weighting = self.get_fold_unfold(z, ks, stride, uf=uf)
+    #             fold, unfold, normalization, weighting = self.get_fold_unfold(z, ks, stride, uf=uf)
 
-                z = unfold(z)  # (bn, nc * prod(**ks), L)
-                # 1. Reshape to img shape
-                z = z.view((z.shape[0], -1, ks[0], ks[1], z.shape[-1]))  # (bn, nc, ks[0], ks[1], L )
+    #             z = unfold(z)  # (bn, nc * prod(**ks), L)
+    #             # 1. Reshape to img shape
+    #             z = z.view((z.shape[0], -1, ks[0], ks[1], z.shape[-1]))  # (bn, nc, ks[0], ks[1], L )
 
-                # 2. apply model loop over last dim
-                if isinstance(self.first_stage_model, VQModelInterface):  
-                    output_list = [self.first_stage_model.decode(z[:, :, :, :, i],
-                                                                 force_not_quantize=predict_cids or force_not_quantize)
-                                   for i in range(z.shape[-1])]
-                else:
+    #             # 2. apply model loop over last dim
+    #             if isinstance(self.first_stage_model, VQModelInterface):  
+    #                 output_list = [self.first_stage_model.decode(z[:, :, :, :, i],
+    #                                                              force_not_quantize=predict_cids or force_not_quantize)
+    #                                for i in range(z.shape[-1])]
+    #             else:
 
-                    output_list = [self.first_stage_model.decode(z[:, :, :, :, i])
-                                   for i in range(z.shape[-1])]
+    #                 output_list = [self.first_stage_model.decode(z[:, :, :, :, i])
+    #                                for i in range(z.shape[-1])]
 
-                o = torch.stack(output_list, axis=-1)  # # (bn, nc, ks[0], ks[1], L)
-                o = o * weighting
-                # Reverse 1. reshape to img shape
-                o = o.view((o.shape[0], -1, o.shape[-1]))  # (bn, nc * ks[0] * ks[1], L)
-                # stitch crops together
-                decoded = fold(o)
-                decoded = decoded / normalization  # norm is shape (1, 1, h, w)
-                return decoded
-            else:
-                if isinstance(self.first_stage_model, VQModelInterface):
-                    return self.first_stage_model.decode(z, force_not_quantize=predict_cids or force_not_quantize)
-                else:
-                    return self.first_stage_model.decode(z)
+    #             o = torch.stack(output_list, axis=-1)  # # (bn, nc, ks[0], ks[1], L)
+    #             o = o * weighting
+    #             # Reverse 1. reshape to img shape
+    #             o = o.view((o.shape[0], -1, o.shape[-1]))  # (bn, nc * ks[0] * ks[1], L)
+    #             # stitch crops together
+    #             decoded = fold(o)
+    #             decoded = decoded / normalization  # norm is shape (1, 1, h, w)
+    #             return decoded
+    #         else:
+    #             if isinstance(self.first_stage_model, VQModelInterface):
+    #                 return self.first_stage_model.decode(z, force_not_quantize=predict_cids or force_not_quantize)
+    #             else:
+    #                 return self.first_stage_model.decode(z)
 
-        else:
-            if isinstance(self.first_stage_model, VQModelInterface):
-                return self.first_stage_model.decode(z, force_not_quantize=predict_cids or force_not_quantize)
-            else:
-                return self.first_stage_model.decode(z)
+    #     else:
+    #         if isinstance(self.first_stage_model, VQModelInterface):
+    #             return self.first_stage_model.decode(z, force_not_quantize=predict_cids or force_not_quantize)
+    #         else:
+    #             return self.first_stage_model.decode(z)
 
     @torch.no_grad()
     def encode_first_stage(self, x):
         if hasattr(self, "split_input_params"):
             if self.split_input_params["patch_distributed_vq"]:
-                ks = self.split_input_params["ks"]  # eg. (128, 128)
-                stride = self.split_input_params["stride"]  # eg. (64, 64)
+                # Patch-based logic (should be adapted to 1D)
                 df = self.split_input_params["vqf"]
-                self.split_input_params['original_image_size'] = x.shape[-2:]
-                bs, nc, h, w = x.shape
-                if ks[0] > h or ks[1] > w:
-                    ks = (min(ks[0], h), min(ks[1], w))
-                    print("reducing Kernel")
+                self.split_input_params['original_image_size'] = x.shape[-1]
+                bs, nc, L = x.shape  # now, L is the length of the 1D latent space vector
+                
+                # In case kernel/stride are defined (but you likely don't need this for 1D)
+                # We will skip patch-based operations here.
+                
+                # Instead of folding/unfolding patches, we directly pass the 1D vector to the encoder
+                z = x  # For 1D latent, we directly use x
+                
+                # Encode the 1D input
+                output = self.first_stage_model.encode(z)
 
-                if stride[0] > h or stride[1] > w:
-                    stride = (min(stride[0], h), min(stride[1], w))
-                    print("reducing stride")
-
-                fold, unfold, normalization, weighting = self.get_fold_unfold(x, ks, stride, df=df)
-                z = unfold(x)  # (bn, nc * prod(**ks), L)
-                # Reshape to img shape
-                z = z.view((z.shape[0], -1, ks[0], ks[1], z.shape[-1]))  # (bn, nc, ks[0], ks[1], L )
-
-                output_list = [self.first_stage_model.encode(z[:, :, :, :, i])
-                               for i in range(z.shape[-1])]
-
-                o = torch.stack(output_list, axis=-1)
-                o = o * weighting
-
-                # Reverse reshape to img shape
-                o = o.view((o.shape[0], -1, o.shape[-1]))  # (bn, nc * ks[0] * ks[1], L)
-                # stitch crops together
-                decoded = fold(o)
-                decoded = decoded / normalization
-                return decoded
-
+                return output
             else:
+                # Directly encode if patch-based encoding is not used
                 return self.first_stage_model.encode(x)
         else:
+            # Directly encode for 1D latent
             return self.first_stage_model.encode(x)
+    # def encode_first_stage(self, x):
+    #     if hasattr(self, "split_input_params"):
+    #         if self.split_input_params["patch_distributed_vq"]:
+    #             ks = self.split_input_params["ks"]  # eg. (128, 128)
+    #             stride = self.split_input_params["stride"]  # eg. (64, 64)
+    #             df = self.split_input_params["vqf"]
+    #             self.split_input_params['original_image_size'] = x.shape[-2:]
+    #             bs, nc, h, w = x.shape
+    #             if ks[0] > h or ks[1] > w:
+    #                 ks = (min(ks[0], h), min(ks[1], w))
+    #                 print("reducing Kernel")
+
+    #             if stride[0] > h or stride[1] > w:
+    #                 stride = (min(stride[0], h), min(stride[1], w))
+    #                 print("reducing stride")
+
+    #             fold, unfold, normalization, weighting = self.get_fold_unfold(x, ks, stride, df=df)
+    #             z = unfold(x)  # (bn, nc * prod(**ks), L)
+    #             # Reshape to img shape
+    #             z = z.view((z.shape[0], -1, ks[0], ks[1], z.shape[-1]))  # (bn, nc, ks[0], ks[1], L )
+
+    #             output_list = [self.first_stage_model.encode(z[:, :, :, :, i])
+    #                            for i in range(z.shape[-1])]
+
+    #             o = torch.stack(output_list, axis=-1)
+    #             o = o * weighting
+
+    #             # Reverse reshape to img shape
+    #             o = o.view((o.shape[0], -1, o.shape[-1]))  # (bn, nc * ks[0] * ks[1], L)
+    #             # stitch crops together
+    #             decoded = fold(o)
+    #             decoded = decoded / normalization
+    #             return decoded
+
+    #         else:
+    #             return self.first_stage_model.encode(x)
+    #     else:
+    #         return self.first_stage_model.encode(x)
 
     def shared_step(self, batch, **kwargs):
         x, c = self.get_input(batch, self.first_stage_key)
@@ -874,7 +929,10 @@ class LatentDiffusion(DDPM):
         return loss
 
     def forward(self, x, c, *args, **kwargs):
-        t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=self.device).long()
+        #x = x.permute(1,0)
+        t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=self.device).long() 
+        # print("lnine 883 self.num_timesteps: ", self.num_timesteps, x.shape[0])
+        # print("shape of t at 882: ", t.shape)
         if self.model.conditioning_key is not None:
             assert c is not None
             if self.cond_stage_trainable:
@@ -905,93 +963,92 @@ class LatentDiffusion(DDPM):
             key = 'c_concat' if self.model.conditioning_key == 'concat' else 'c_crossattn'
             cond = {key: cond}
 
-        if hasattr(self, "split_input_params"):
-            assert len(cond) == 1  # todo can only deal with one conditioning atm
-            assert not return_ids  
-            ks = self.split_input_params["ks"]  # eg. (128, 128)
-            stride = self.split_input_params["stride"]  # eg. (64, 64)
+        # if hasattr(self, "split_input_params"):
+        #     assert len(cond) == 1  # todo can only deal with one conditioning atm
+        #     assert not return_ids  
+        #     ks = self.split_input_params["ks"]  # eg. (128, 128)
+        #     stride = self.split_input_params["stride"]  # eg. (64, 64)
 
-            h, w = x_noisy.shape[-2:]
+        #     h, w = x_noisy.shape[-2:]
 
-            fold, unfold, normalization, weighting = self.get_fold_unfold(x_noisy, ks, stride)
+        #     fold, unfold, normalization, weighting = self.get_fold_unfold(x_noisy, ks, stride)
 
-            z = unfold(x_noisy)  # (bn, nc * prod(**ks), L)
-            # Reshape to img shape
-            z = z.view((z.shape[0], -1, ks[0], ks[1], z.shape[-1]))  # (bn, nc, ks[0], ks[1], L )
-            z_list = [z[:, :, :, :, i] for i in range(z.shape[-1])]
+        #     z = unfold(x_noisy)  # (bn, nc * prod(**ks), L)
+        #     # Reshape to img shape
+        #     z = z.view((z.shape[0], -1, ks[0], ks[1], z.shape[-1]))  # (bn, nc, ks[0], ks[1], L )
+        #     z_list = [z[:, :, :, :, i] for i in range(z.shape[-1])]
 
-            if self.cond_stage_key in ["image", "LR_image", "segmentation",
-                                       'bbox_img'] and self.model.conditioning_key:  # todo check for completeness
-                c_key = next(iter(cond.keys()))  # get key
-                c = next(iter(cond.values()))  # get value
-                assert (len(c) == 1)  # todo extend to list with more than one elem
-                c = c[0]  # get element
+        #     if self.cond_stage_key in ["image", "LR_image", "segmentation",
+        #                                'bbox_img'] and self.model.conditioning_key:  # todo check for completeness
+        #         c_key = next(iter(cond.keys()))  # get key
+        #         c = next(iter(cond.values()))  # get value
+        #         assert (len(c) == 1)  # todo extend to list with more than one elem
+        #         c = c[0]  # get element
 
-                c = unfold(c)
-                c = c.view((c.shape[0], -1, ks[0], ks[1], c.shape[-1]))  # (bn, nc, ks[0], ks[1], L )
+        #         c = unfold(c)
+        #         c = c.view((c.shape[0], -1, ks[0], ks[1], c.shape[-1]))  # (bn, nc, ks[0], ks[1], L )
 
-                cond_list = [{c_key: [c[:, :, :, :, i]]} for i in range(c.shape[-1])]
+        #         cond_list = [{c_key: [c[:, :, :, :, i]]} for i in range(c.shape[-1])]
 
-            elif self.cond_stage_key == 'coordinates_bbox':
-                assert 'original_image_size' in self.split_input_params, 'BoudingBoxRescaling is missing original_image_size'
+        #     elif self.cond_stage_key == 'coordinates_bbox':
+        #         assert 'original_image_size' in self.split_input_params, 'BoudingBoxRescaling is missing original_image_size'
 
-                # assuming padding of unfold is always 0 and its dilation is always 1
-                n_patches_per_row = int((w - ks[0]) / stride[0] + 1)
-                full_img_h, full_img_w = self.split_input_params['original_image_size']
-                # as we are operating on latents, we need the factor from the original image size to the
-                # spatial latent size to properly rescale the crops for regenerating the bbox annotations
-                num_downs = self.first_stage_model.encoder.num_resolutions - 1
-                rescale_latent = 2 ** (num_downs)
+        #         # assuming padding of unfold is always 0 and its dilation is always 1
+        #         n_patches_per_row = int((w - ks[0]) / stride[0] + 1)
+        #         full_img_h, full_img_w = self.split_input_params['original_image_size']
+        #         # as we are operating on latents, we need the factor from the original image size to the
+        #         # spatial latent size to properly rescale the crops for regenerating the bbox annotations
+        #         num_downs = self.first_stage_model.encoder.num_resolutions - 1
+        #         rescale_latent = 2 ** (num_downs)
 
-                # get top left postions of patches as conforming for the bbbox tokenizer, therefore we
-                # need to rescale the tl patch coordinates to be in between (0,1)
-                tl_patch_coordinates = [(rescale_latent * stride[0] * (patch_nr % n_patches_per_row) / full_img_w,
-                                         rescale_latent * stride[1] * (patch_nr // n_patches_per_row) / full_img_h)
-                                        for patch_nr in range(z.shape[-1])]
+        #         # get top left postions of patches as conforming for the bbbox tokenizer, therefore we
+        #         # need to rescale the tl patch coordinates to be in between (0,1)
+        #         tl_patch_coordinates = [(rescale_latent * stride[0] * (patch_nr % n_patches_per_row) / full_img_w,
+        #                                  rescale_latent * stride[1] * (patch_nr // n_patches_per_row) / full_img_h)
+        #                                 for patch_nr in range(z.shape[-1])]
 
-                # patch_limits are tl_coord, width and height coordinates as (x_tl, y_tl, h, w)
-                patch_limits = [(x_tl, y_tl,
-                                 rescale_latent * ks[0] / full_img_w,
-                                 rescale_latent * ks[1] / full_img_h) for x_tl, y_tl in tl_patch_coordinates]
-                # patch_values = [(np.arange(x_tl,min(x_tl+ks, 1.)),np.arange(y_tl,min(y_tl+ks, 1.))) for x_tl, y_tl in tl_patch_coordinates]
+        #         # patch_limits are tl_coord, width and height coordinates as (x_tl, y_tl, h, w)
+        #         patch_limits = [(x_tl, y_tl,
+        #                          rescale_latent * ks[0] / full_img_w,
+        #                          rescale_latent * ks[1] / full_img_h) for x_tl, y_tl in tl_patch_coordinates]
+        #         # patch_values = [(np.arange(x_tl,min(x_tl+ks, 1.)),np.arange(y_tl,min(y_tl+ks, 1.))) for x_tl, y_tl in tl_patch_coordinates]
 
-                # tokenize crop coordinates for the bounding boxes of the respective patches
-                patch_limits_tknzd = [torch.LongTensor(self.bbox_tokenizer._crop_encoder(bbox))[None].to(self.device)
-                                      for bbox in patch_limits]  # list of length l with tensors of shape (1, 2)
-                print(patch_limits_tknzd[0].shape)
-                # cut tknzd crop position from conditioning
-                assert isinstance(cond, dict), 'cond must be dict to be fed into model'
-                cut_cond = cond['c_crossattn'][0][..., :-2].to(self.device)
-                print(cut_cond.shape)
+        #         # tokenize crop coordinates for the bounding boxes of the respective patches
+        #         patch_limits_tknzd = [torch.LongTensor(self.bbox_tokenizer._crop_encoder(bbox))[None].to(self.device)
+        #                               for bbox in patch_limits]  # list of length l with tensors of shape (1, 2)
+        #         print(patch_limits_tknzd[0].shape)
+        #         # cut tknzd crop position from conditioning
+        #         assert isinstance(cond, dict), 'cond must be dict to be fed into model'
+        #         cut_cond = cond['c_crossattn'][0][..., :-2].to(self.device)
+        #         print(cut_cond.shape)
 
-                adapted_cond = torch.stack([torch.cat([cut_cond, p], dim=1) for p in patch_limits_tknzd])
-                adapted_cond = rearrange(adapted_cond, 'l b n -> (l b) n')
-                print(adapted_cond.shape)
-                adapted_cond = self.get_learned_conditioning(adapted_cond)
-                print(adapted_cond.shape)
-                adapted_cond = rearrange(adapted_cond, '(l b) n d -> l b n d', l=z.shape[-1])
-                print(adapted_cond.shape)
+        #         adapted_cond = torch.stack([torch.cat([cut_cond, p], dim=1) for p in patch_limits_tknzd])
+        #         adapted_cond = rearrange(adapted_cond, 'l b n -> (l b) n')
+        #         print(adapted_cond.shape)
+        #         adapted_cond = self.get_learned_conditioning(adapted_cond)
+        #         print(adapted_cond.shape)
+        #         adapted_cond = rearrange(adapted_cond, '(l b) n d -> l b n d', l=z.shape[-1])
+        #         print(adapted_cond.shape)
 
-                cond_list = [{'c_crossattn': [e]} for e in adapted_cond]
+        #         cond_list = [{'c_crossattn': [e]} for e in adapted_cond]
 
-            else:
-                cond_list = [cond for i in range(z.shape[-1])]  # Todo make this more efficient
+        #     else:
+        #         cond_list = [cond for i in range(z.shape[-1])]  # Todo make this more efficient
 
-            # apply model by loop over crops
-            output_list = [self.model(z_list[i], t, **cond_list[i]) for i in range(z.shape[-1])]
-            assert not isinstance(output_list[0],
-                                  tuple)  # todo cant deal with multiple model outputs check this never happens
+        #     # apply model by loop over crops
+        #     output_list = [self.model(z_list[i], t, **cond_list[i]) for i in range(z.shape[-1])]
+        #     assert not isinstance(output_list[0],
+        #                           tuple)  # todo cant deal with multiple model outputs check this never happens
 
-            o = torch.stack(output_list, axis=-1)
-            o = o * weighting
-            # Reverse reshape to img shape
-            o = o.view((o.shape[0], -1, o.shape[-1]))  # (bn, nc * ks[0] * ks[1], L)
-            # stitch crops together
-            x_recon = fold(o) / normalization
+        #     o = torch.stack(output_list, axis=-1)
+        #     o = o * weighting
+        #     # Reverse reshape to img shape
+        #     o = o.view((o.shape[0], -1, o.shape[-1]))  # (bn, nc * ks[0] * ks[1], L)
+        #     # stitch crops together
+        #     x_recon = fold(o) / normalization
 
-        else:
-            x_recon = self.model(x_noisy, t, **cond)
-
+        #else:
+        x_recon = self.model(x_noisy, t, **cond)
         if isinstance(x_recon, tuple) and not return_ids:
             return x_recon[0]
         else:
@@ -1018,6 +1075,7 @@ class LatentDiffusion(DDPM):
     def p_losses(self, x_start, cond, t, noise=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+        # print(f"x_noisy shape: {x_noisy.shape}")
         model_output = self.apply_model(x_noisy, t, cond)
 
         loss_dict = {}
@@ -1032,8 +1090,9 @@ class LatentDiffusion(DDPM):
 
         loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
         loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean()})
-
+        #print("shape of t at line 1043: ", t.shape)
         logvar_t = self.logvar[t].to(self.device)
+        #print("line 1043 shape of loss simple: ", loss_simple.shape, "shape of logvar_t: ", logvar_t.shape)
         loss = loss_simple / torch.exp(logvar_t) + logvar_t
         # loss = loss_simple / torch.exp(self.logvar) + self.logvar
         if self.learn_logvar:
@@ -1042,7 +1101,7 @@ class LatentDiffusion(DDPM):
 
         loss = self.l_simple_weight * loss.mean()
 
-        loss_vlb = self.get_loss(model_output, target, mean=False).mean(dim=(1, 2, 3))
+        loss_vlb = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
         loss_vlb = (self.lvlb_weights[t] * loss_vlb).mean()
         loss_dict.update({f'{prefix}/loss_vlb': loss_vlb})
         loss += (self.original_elbo_weight * loss_vlb)
@@ -1052,6 +1111,7 @@ class LatentDiffusion(DDPM):
 
     def p_mean_variance(self, x, c, t, clip_denoised: bool, return_codebook_ids=False, quantize_denoised=False,
                         return_x0=False, score_corrector=None, corrector_kwargs=None):
+        #print("P_MEAN_VARIANCE CALLED")
         t_in = t
         model_out = self.apply_model(x, t_in, c, return_ids=return_codebook_ids)
 
@@ -1220,11 +1280,12 @@ class LatentDiffusion(DDPM):
         return img
 
     @torch.no_grad()
-    def sample(self, cond, batch_size=16, return_intermediates=False, x_T=None,
+    def sample(self, cond, batch_size=3, return_intermediates=False, x_T=None,
                verbose=True, timesteps=None, quantize_denoised=False,
                mask=None, x0=None, shape=None,**kwargs):
         if shape is None:
-            shape = (batch_size, self.channels, self.image_size, self.image_size)
+            # shape = (batch_size, self.channels, self.image_size, self.image_size)
+            shape = (batch_size, 1024)
         if cond is not None:
             if isinstance(cond, dict):
                 cond = {key: cond[key][:batch_size] if not isinstance(cond[key], list) else
@@ -1239,10 +1300,11 @@ class LatentDiffusion(DDPM):
 
     @torch.no_grad()
     def sample_log(self,cond,batch_size,ddim, ddim_steps,**kwargs):
-
+        #TODO : Change DDIM so that it can sample from 1024 space.
         if ddim:
             ddim_sampler = DDIMSampler(self)
             shape = (self.channels, self.image_size, self.image_size)
+            #shape = 1024 #TODO: Change this to 1024, not hardcoded
             samples, intermediates =ddim_sampler.sample(ddim_steps,batch_size,
                                                         shape,cond,verbose=False,**kwargs)
 
@@ -1255,7 +1317,7 @@ class LatentDiffusion(DDPM):
 
     @torch.no_grad()
     def log_images(self, batch, N=8, n_row=4, sample=True, ddim_steps=200, ddim_eta=1., return_keys=None,
-                   quantize_denoised=True, inpaint=True, plot_denoise_rows=False, plot_progressive_rows=True,
+                   quantize_denoised=True, inpaint=False, plot_denoise_rows=False, plot_progressive_rows=False,
                    plot_diffusion_rows=True, **kwargs):
 
         use_ddim = ddim_steps is not None
@@ -1285,23 +1347,23 @@ class LatentDiffusion(DDPM):
             if ismap(xc):
                 log["original_conditioning"] = self.to_rgb(xc)
 
-        if plot_diffusion_rows:
-            # get diffusion row
-            diffusion_row = list()
-            z_start = z[:n_row]
-            for t in range(self.num_timesteps):
-                if t % self.log_every_t == 0 or t == self.num_timesteps - 1:
-                    t = repeat(torch.tensor([t]), '1 -> b', b=n_row)
-                    t = t.to(self.device).long()
-                    noise = torch.randn_like(z_start)
-                    z_noisy = self.q_sample(x_start=z_start, t=t, noise=noise)
-                    diffusion_row.append(self.decode_first_stage(z_noisy))
+        # if plot_diffusion_rows:
+        #     # get diffusion row
+        #     diffusion_row = list()
+        #     z_start = z[:n_row]
+        #     for t in range(self.num_timesteps):
+        #         if t % self.log_every_t == 0 or t == self.num_timesteps - 1:
+        #             t = repeat(torch.tensor([t]), '1 -> b', b=n_row)
+        #             t = t.to(self.device).long()
+        #             noise = torch.randn_like(z_start)
+        #             z_noisy = self.q_sample(x_start=z_start, t=t, noise=noise)
+        #             diffusion_row.append(self.decode_first_stage(z_noisy))
 
-            diffusion_row = torch.stack(diffusion_row)  # n_log_step, n_row, C, H, W
-            diffusion_grid = rearrange(diffusion_row, 'n b c h w -> b n c h w')
-            diffusion_grid = rearrange(diffusion_grid, 'b n c h w -> (b n) c h w')
-            diffusion_grid = make_grid(diffusion_grid, nrow=diffusion_row.shape[0])
-            log["diffusion_row"] = diffusion_grid
+        #     diffusion_row = torch.stack(diffusion_row)  # n_log_step, n_row, C, H, W
+        #     diffusion_grid = rearrange(diffusion_row, 'n b c h w -> b n c h w')
+        #     diffusion_grid = rearrange(diffusion_grid, 'b n c h w -> (b n) c h w')
+        #     diffusion_grid = make_grid(diffusion_grid, nrow=diffusion_row.shape[0])
+        #     log["diffusion_row"] = diffusion_grid
 
         if sample:
             # get denoise row
@@ -1311,45 +1373,46 @@ class LatentDiffusion(DDPM):
                 # samples, z_denoise_row = self.sample(cond=c, batch_size=N, return_intermediates=True)
             x_samples = self.decode_first_stage(samples)
             log["samples"] = x_samples
-            if plot_denoise_rows:
-                denoise_grid = self._get_denoise_row_from_list(z_denoise_row)
-                log["denoise_row"] = denoise_grid
+            # if plot_denoise_rows:
+            #     denoise_grid = self._get_denoise_row_from_list(z_denoise_row)
+            #     log["denoise_row"] = denoise_grid
 
-            if quantize_denoised and not isinstance(self.first_stage_model, AutoencoderKL) and not isinstance(
-                    self.first_stage_model, IdentityFirstStage):
-                # also display when quantizing x0 while sampling
-                with self.ema_scope("Plotting Quantized Denoised"):
-                    samples, z_denoise_row = self.sample_log(cond=c,batch_size=N,ddim=use_ddim,
-                                                             ddim_steps=ddim_steps,eta=ddim_eta,
-                                                             quantize_denoised=True)
-                    # samples, z_denoise_row = self.sample(cond=c, batch_size=N, return_intermediates=True,
-                    #                                      quantize_denoised=True)
-                x_samples = self.decode_first_stage(samples.to(self.device))
-                log["samples_x0_quantized"] = x_samples
+            # if quantize_denoised and not isinstance(self.first_stage_model, AutoencoderKL) and not isinstance(
+            #         self.first_stage_model, IdentityFirstStage):
+            #     # also display when quantizing x0 while sampling
+            #     with self.ema_scope("Plotting Quantized Denoised"):
+            #         samples, z_denoise_row = self.sample_log(cond=c,batch_size=N,ddim=use_ddim,
+            #                                                  ddim_steps=ddim_steps,eta=ddim_eta,
+            #                                                  quantize_denoised=True)
+            #         # samples, z_denoise_row = self.sample(cond=c, batch_size=N, return_intermediates=True,
+            #         #                                      quantize_denoised=True)
+            #     x_samples = self.decode_first_stage(samples.to(self.device))
+            #     log["samples_x0_quantized"] = x_samples
 
-            if inpaint:
-                # make a simple center square
-                b, h, w = z.shape[0], z.shape[2], z.shape[3]
-                mask = torch.ones(N, h, w).to(self.device)
-                # zeros will be filled in
-                mask[:, h // 4:3 * h // 4, w // 4:3 * w // 4] = 0.
-                mask = mask[:, None, ...]
-                with self.ema_scope("Plotting Inpaint"):
+        #     if inpaint:
+        #         # make a simple center square
+        #         b, h, w = z.shape[0], z.shape[2], z.shape[3]
+        #         mask = torch.ones(N, h, w).to(self.device)
+        #         # zeros will be filled in
+        #         mask[:, h // 4:3 * h // 4, w // 4:3 * w // 4] = 0.
+        #         mask = mask[:, None, ...]
+        #         with self.ema_scope("Plotting Inpaint"):
 
-                    samples, _ = self.sample_log(cond=c,batch_size=N,ddim=use_ddim, eta=ddim_eta,
-                                                ddim_steps=ddim_steps, x0=z[:N], mask=mask)
-                x_samples = self.decode_first_stage(samples.to(self.device))
-                log["samples_inpainting"] = x_samples
-                log["mask"] = mask
+        #             samples, _ = self.sample_log(cond=c,batch_size=N,ddim=use_ddim, eta=ddim_eta,
+        #                                         ddim_steps=ddim_steps, x0=z[:N], mask=mask)
+        #         x_samples = self.decode_first_stage(samples.to(self.device))
+        #         log["samples_inpainting"] = x_samples
+        #         log["mask"] = mask
 
-                # outpaint
-                with self.ema_scope("Plotting Outpaint"):
-                    samples, _ = self.sample_log(cond=c, batch_size=N, ddim=use_ddim,eta=ddim_eta,
-                                                ddim_steps=ddim_steps, x0=z[:N], mask=mask)
-                x_samples = self.decode_first_stage(samples.to(self.device))
-                log["samples_outpainting"] = x_samples
+        #         # outpaint
+        #         with self.ema_scope("Plotting Outpaint"):
+        #             samples, _ = self.sample_log(cond=c, batch_size=N, ddim=use_ddim,eta=ddim_eta,
+        #                                         ddim_steps=ddim_steps, x0=z[:N], mask=mask)
+        #         x_samples = self.decode_first_stage(samples.to(self.device))
+        #         log["samples_outpainting"] = x_samples
 
         if plot_progressive_rows:
+            print("image size:", self.image_size)
             with self.ema_scope("Plotting Progressives"):
                 img, progressives = self.progressive_denoising(c,
                                                                shape=(self.channels, self.image_size, self.image_size),
@@ -1405,6 +1468,7 @@ class DiffusionWrapper(pl.LightningModule):
         self.conditioning_key = conditioning_key
         assert self.conditioning_key in [None, 'concat', 'crossattn', 'hybrid', 'adm']
         
+        
         #TODO : initialize diff model config as a dictionary and get the values from it instead of using the diffuion model object
         if self.diffusion_model.use_svd : 
             try :
@@ -1415,18 +1479,19 @@ class DiffusionWrapper(pl.LightningModule):
                 print("U_path should be specified correctly")
 
     def forward(self, x, t, c_concat: list = None, c_crossattn: list = None):
-        # batch_size, channels, h, w = x.shape
+        #with torch.no_grad():
+        x = x.squeeze() # (3, 1024)
+        batch_size = x.shape[0]
         
-        # x = x.permute(3,2,1,0) # get to (w,h,c,b)
+        x = x.reshape(batch_size, -1) # results in (3, 1024)
         
-        # x = x.reshape(-1, channels, batch_size) # get to (w*h,c,b)
-        # x = x.reshape(-1, batch_size) # get to (w*h*c,b)
+        x = torch.matmul(self.U_k, x.T) #results in (4096, 3)
+        x = x.transpose(0,1) # (3, 4096)
         
-        # x = torch.matmul(self.U_k, x) # get to (4096, b)
-        # x = x.permute(1,0) # get to (b, 4096)
-        
-        # x = x.reshape(batch_size, self.full_latent_dim
-        #             [0], self.full_latent_dim[1], self.full_latent_dim[2])  
+        x = x.reshape(batch_size, self.full_latent_dim[0], -1) # results in (3, 4, 1024)
+        x = x.reshape(batch_size, self.full_latent_dim
+                    [0], self.full_latent_dim[1], self.full_latent_dim[2])  
+        # (3, 4, 32, 32)
         
         if self.conditioning_key is None:
             out = self.diffusion_model(x, t)
@@ -1445,38 +1510,12 @@ class DiffusionWrapper(pl.LightningModule):
             out = self.diffusion_model(x, t, y=cc)
         else:
             raise NotImplementedError()
+        # (3, 4, 32, 32)
+        out = out.view(batch_size, -1) # results in (3, 4096)
+        out = torch.matmul(self.U_k.T, out.T) # results in (1024, 3)
+        out = out.transpose(0, 1) # results in (3, 1024)
         
-        # out = out.permute(3,2,1,0) # get to (b,c,h,w)
+        #TODO: change hardcode
+        out = out.reshape(batch_size, 4, 16, 16) 
         
-        # out = out.reshape(-1, channels, batch_size)
-        # out = out.reshape(-1, batch_size)
-        
-        
-        # out = torch.matmul(self.U_k.T, out)
-        # out = out.permute(1,0).contiguous()
-        # out = out.reshape(batch_size, self.full_latent_dim[0], 16, 16)
         return out
-
-
-class Layout2ImgDiffusion(LatentDiffusion):
-    # TODO: move all layout-specific hacks to this class
-    def __init__(self, cond_stage_key, *args, **kwargs):
-        assert cond_stage_key == 'coordinates_bbox', 'Layout2ImgDiffusion only for cond_stage_key="coordinates_bbox"'
-        super().__init__(cond_stage_key=cond_stage_key, *args, **kwargs)
-
-    def log_images(self, batch, N=8, *args, **kwargs):
-        logs = super().log_images(batch=batch, N=N, *args, **kwargs)
-
-        key = 'train' if self.training else 'validation'
-        dset = self.trainer.datamodule.datasets[key]
-        mapper = dset.conditional_builders[self.cond_stage_key]
-
-        bbox_imgs = []
-        map_fn = lambda catno: dset.get_textual_label(dset.get_category_id(catno))
-        for tknzd_bbox in batch[self.cond_stage_key][:N]:
-            bboximg = mapper.plot(tknzd_bbox.detach().cpu(), map_fn, (256, 256))
-            bbox_imgs.append(bboximg)
-
-        cond_img = torch.stack(bbox_imgs, dim=0)
-        logs['bbox_image'] = cond_img
-        return logs

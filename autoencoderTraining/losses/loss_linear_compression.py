@@ -29,16 +29,16 @@ class MSSSIM_Loss(nn.Module):
         self.discriminator_weight = disc_weight
         self.disc_conditional = disc_conditional
         
-    def get_partials(self, tensor):
-        # partial derivatives
-        dx = tensor[:, :, :, 1:] - tensor[:, :, :, :-1] 
-        dy = tensor[:, :, 1:, :] - tensor[:, :, :-1, :]
+    # def get_partials(self, tensor):
+    #     # partial derivatives
+    #     dx = tensor[:, :, :, 1:] - tensor[:, :, :, :-1] 
+    #     dy = tensor[:, :, 1:, :] - tensor[:, :, :-1, :]
 
-        # Pad to maintain original size
-        dx = F.pad(dx, (0, 1, 0, 0)) 
-        dy = F.pad(dy, (0, 0, 0, 1)) 
+    #     # Pad to maintain original size
+    #     dx = F.pad(dx, (0, 1, 0, 0)) 
+    #     dy = F.pad(dy, (0, 0, 0, 1)) 
 
-        return dx, dy
+    #     return dx, dy
 
     def calculate_adaptive_weight(self, nll_loss, g_loss, last_layer=None):
         if last_layer is not None:

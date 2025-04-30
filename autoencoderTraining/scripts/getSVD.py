@@ -6,23 +6,23 @@ import torch
 import pickle
 import numpy as np
 import matplotlib.pyplot as plt
-from models.autoencoder import AutoencoderKL
+from models.autoencoder_downsample import AutoencoderKL
 
 
-def find_min_max(file_path):
-    """Find the minimum and maximum of an image dataset"""
-    min = np.infty
-    max = -np.infty
-    with open(file_path, 'rb') as f:
-        image = pickle.load(f)
+# def find_min_max(file_path):
+#     """Find the minimum and maximum of an image dataset"""
+#     min = np.infty
+#     max = -np.infty
+#     with open(file_path, 'rb') as f:
+#         image = pickle.load(f)
     
-    if isinstance(image, torch.Tensor):
-        image = image.numpy()
+#     if isinstance(image, torch.Tensor):
+#         image = image.numpy()
     
-    image = (image - image.min()) / (image.max() - image.min())  # Normalize to [0, 1]
-    image = 2 * image - 1  # Shift to [-1, 1]
-    image = torch.tensor(image, dtype=torch.float32).unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
-    return min, max
+#     image = (image - image.min()) / (image.max() - image.min())  # Normalize to [0, 1]
+#     image = 2 * image - 1  # Shift to [-1, 1]
+#     image = torch.tensor(image, dtype=torch.float32).unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
+#     return min, max
 
 def load_image(file_path):
     """Load an image from a pickle file and preprocess it."""
@@ -31,8 +31,9 @@ def load_image(file_path):
     
     if isinstance(image, torch.Tensor):
         image = image.numpy()
-    
-    image = (image - image.min()) / (image.max() - image.min())  # Normalize to [0, 1]
+    global_min = -5.315805745492602
+    global_max = 1.4058262706509637
+    image = (image - global_min) / (global_max - global_min)  # Normalize to [0, 1]
     image = 2 * image - 1  # Shift to [-1, 1]
     image = torch.tensor(image, dtype=torch.float32).unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
     return image
@@ -46,7 +47,7 @@ if __name__ == "__main__":
     model.eval()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
-    model.init_from_ckpt("/workspace/thomas/latentDiffusion/autoencoderTraining/weights/no_explosion_10.ckpt")
+    model.init_from_ckpt("/workspace/thomas/latentDiffusion/autoencoderTraining/weights/kl-f8.ckpt")
     image_dir = '/workspace/thomas/latentDiffusion/autoencoderTraining/data/MuaSlices/train'
     image_files = os.listdir(image_dir)
 
@@ -54,7 +55,7 @@ if __name__ == "__main__":
     #means = torch.zeros(size = (4096, N), device=device)
     flattened_latents = torch.zeros(size = (4096, N), device=device)
     for img_number in range(N):
-        print("The image number is {:d}".format(img_number))
+        #print("The image number is {:d}".format(img_number))
         image_file = os.path.join(image_dir, image_files[img_number])
         original_image = load_image(image_file)
         if original_image is None:
@@ -63,10 +64,15 @@ if __name__ == "__main__":
         
         with torch.no_grad():
             flattened_latent = model.encode(original_image).mean.flatten()
-            mean = flattened_latent.mean()
-            flattened_latent = flattened_latent - mean
+            # mean = flattened_latent.mean()
+            # flattened_latent = flattened_latent - mean
             flattened_latents[:, img_number] = flattened_latent
             
+    flattened_mean = torch.mean(flattened_latents, dim = -1)
+    flattened_latents = flattened_latents - flattened_mean[:, None]
+    
+    
+    #torch.save(flattened_mean[:, None].cpu(), 'flattened_mean.pt')
     with torch.no_grad():
         U, S, Vt = torch.linalg.svd(flattened_latents)
     print("Number of non-zero values:", (S>0).sum().item())
@@ -79,7 +85,7 @@ if __name__ == "__main__":
     plt.savefig("svd.png")
     torch.save(S.cpu(), 'sing_vals.pt')
     torch.save(Vt.cpu(), 'Vt.pt')
-    torch.save(U.cpu(), 'U.pt')
+    torch.save(U.cpu(), 'U_old_test.pt')
     print("The ratio of the first to the 1025th singular value is {:.4f}".format(S[1024]/S[0]))
     
     

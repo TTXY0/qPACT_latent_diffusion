@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 from pytorch_lightning.callbacks import Callback
 import torch.nn.functional as F
 import torch
-VER_NAME = "U1024"
+VER_NAME = "U1024_fixed"
 config_paths = {
     'super': '/scratch/10122/thomaswynn7394/latentDiffusion/autoencoderTraining/configs/config_super_f8.yaml',
     'local': '/workspace/thomas/latentDiffusion/autoencoderTraining/configs/config_local_k1024.yaml'
@@ -33,17 +33,18 @@ class CustomImagePickleDataset(Dataset):
         self.global_min, self.global_max = self.compute_global_min_max()
 
     def compute_global_min_max(self):
-        global_min = float('inf')
-        global_max = float('-inf')
+        # global_min = float('inf')
+        # global_max = float('-inf')
         
-        for file_name in self.file_list:
-            file_path = os.path.join(self.data_root, file_name)
-            with open(file_path, 'rb') as f:
-                image = pickle.load(f).numpy()
+        # for file_name in self.file_list:
+        #     file_path = os.path.join(self.data_root, file_name)
+        #     with open(file_path, 'rb') as f:
+        #         image = pickle.load(f).numpy()
             
-            global_min = min(global_min, image.min())
-            global_max = max(global_max, image.max())
-        
+        #     global_min = min(global_min, image.min())
+        #     global_max = max(global_max, image.max())
+        global_min = -5.315805745492602
+        global_max = 1.4058262706509637
         return global_min, global_max
 
     def __len__(self):

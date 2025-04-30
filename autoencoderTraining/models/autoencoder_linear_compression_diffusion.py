@@ -11,50 +11,78 @@ from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 
 from ldm.util import instantiate_from_config
 
-# class DiagonalGaussianDistribution(object):
-#     def __init__(self, parameters, deterministic=False):
-#         self.parameters = parameters
-#         self.mean, self.logvar = torch.chunk(parameters, 2, dim=1)
-#         self.logvar = torch.clamp(self.logvar, -30.0, 20.0)
-#         self.deterministic = deterministic
-#         self.std = torch.exp(0.5 * self.logvar)
-#         self.var = torch.exp(self.logvar)
-#         self.std = torch.ones_like(self.std)
-#         self.mean = torch.zeros_like(self.mean)
-#         if self.deterministic:
-#             self.var = self.std = torch.zeros_like(self.mean).to(device=self.parameters.device)
 
-#     def sample(self):
-#         x = self.mean + self.std * torch.randn(self.mean.shape).to(device=self.parameters.device)
-#         return x
+class CompressedGaussianDistribution(object):
+    def __init__(self, parameters, U_k, deterministic=False):
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.U_k = U_k.to(self.device)
+        self.parameters = parameters
+        self.mean, self.logvar = torch.chunk(parameters, 2, dim=1)
+        self.logvar = torch.clamp(self.logvar, -30.0, 20.0)
+        self.deterministic = deterministic
+        self.std = torch.exp(0.5 * self.logvar)
+        self.var = torch.exp(self.logvar)
+        if self.deterministic:
+            self.var = self.std = torch.zeros_like(self.mean).to(device=self.parameters.device)
 
-#     def kl(self, other=None):
-#         if self.deterministic:
-#             return torch.Tensor([0.])
-#         else:
-#             if other is None:
-#                 return 0.5 * torch.sum(torch.pow(self.mean, 2)
-#                                        + self.var - 1.0 - self.logvar,
-#                                        dim=[1, 2, 3])
-#             else:
-#                 return 0.5 * torch.sum(
-#                     torch.pow(self.mean - other.mean, 2) / other.var
-#                     + self.var / other.var - 1.0 - self.logvar + other.logvar,
-#                     dim=[1, 2, 3])
+    def sample(self):
+        batch_size, channels, height, width = self.mean.shape
+        
+        # Flatten the tensors
+        mean_flat = self.mean.reshape(-1, batch_size)  
+        std_flat = self.std.reshape(-1, batch_size)    
+        noise = torch.randn_like(mean_flat)
+        
+        sample = mean_flat + noise * std_flat
+        sample = sample.to(self.device)
+        
+        x = torch.matmul(self.U_k.T, sample)  # (k, batch)
+        ##############################
+        x = torch.transpose(x, 0, 1) # (batch, k)
+        
+        L = height * width
+        h = int((L // channels) ** 0.5)
+        w = h
+        
+        x = x.reshape(batch_size, channels, h, w)
 
-#     def nll(self, sample, dims=[1,2,3]):
-#         if self.deterministic:
-#             return torch.Tensor([0.])
-#         logtwopi = np.log(2.0 * np.pi)
-#         return 0.5 * torch.sum(
-#             logtwopi + self.logvar + torch.pow(sample - self.mean, 2) / self.var,
-#             dim=dims)
+        return x
 
-#     def mode(self):
-#         return self.mean
+    # def sample(self):
+    #     x = self.mean + self.std * torch.randn(self.mean.shape).to(device=self.parameters.device)
+    #     return x
+
+
+
+    def kl(self, other=None):
+        if self.deterministic:
+            return torch.Tensor([0.])
+        else:
+            if other is None:
+                return 0.5 * torch.sum(torch.pow(self.mean, 2)
+                                       + self.var - 1.0 - self.logvar,
+                                       dim=[1, 2, 3])
+            else:
+                return 0.5 * torch.sum(
+                    torch.pow(self.mean - other.mean, 2) / other.var
+                    + self.var / other.var - 1.0 - self.logvar + other.logvar,
+                    dim=[1, 2, 3])
+
+    def nll(self, sample, dims=1):
+        if self.deterministic:
+            return torch.Tensor([0.])
+        logtwopi = np.log(2.0 * np.pi)
+        return 0.5 * torch.sum(
+            logtwopi + self.logvar + torch.pow(sample - self.mean, 2) / self.var,
+            dim=dims)
+
+    def mode(self):
+        return self.mean
 
 class AutoencoderKL(pl.LightningModule):
     def __init__(self,
+                 k,
+                 U_path,
                  ddconfig,
                  lossconfig,
                  embed_dim,
@@ -71,10 +99,6 @@ class AutoencoderKL(pl.LightningModule):
         self.decoder = Decoder(**ddconfig)
         self.loss = instantiate_from_config(lossconfig)
         
-        # self.pre_layer = torch.nn.Conv2d(1, 3, kernel_size=4, stride=4, padding=0, bias=False)
-        # self.upsample = torch.nn.ConvTranspose2d(in_channels=3, out_channels=1, kernel_size=4, stride=4, padding=0, bias=False)
-        #Consider overlap in convolution
-        # Two 2x downsampling layers
         self.pre_layer_1 = torch.nn.Conv2d(1, 3, kernel_size=2, stride=2, padding=0, bias=False)
         self.pre_layer_2 = torch.nn.Conv2d(3, 3, kernel_size=2, stride=2, padding=0, bias=False)
 
@@ -84,28 +108,21 @@ class AutoencoderKL(pl.LightningModule):
 
         
         with torch.no_grad(): 
-            # self.pre_layer.weight.data.fill_(1/16)
-            # self.upsample.weight.data.fill_(1/3)
-            
-            # for 1.3.3.3
-            # self.pre_layer_1.weight.data.fill_(1/4)
-            # self.pre_layer_2.weight.data.fill_(1/12)
-            
-            # self.upsample_1.weight.data.fill_(1/4)
-            # self.upsample_2.weight.data.fill_(1/3)
-            
-            # for 1.32.32.3
             self.pre_layer_1.weight.data.fill_(1/4)
             self.pre_layer_2.weight.data.fill_(1/128) # 32 by 2 by 2
             
             self.upsample_1.weight.data.fill_(1/3) 
             self.upsample_2.weight.data.fill_(1/32)
-
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
         assert ddconfig["double_z"]
+        self.k = k
+        self.U = torch.load(U_path).to(device)
+        self.U_k = self.U[:,:k]
         self.quant_conv = torch.nn.Conv2d(2*ddconfig["z_channels"], 2*embed_dim, 1)
         self.post_quant_conv = torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1)
         self.embed_dim = embed_dim
+        self.original_latent_shape = [4,32,32]
         if colorize_nlabels is not None:
             assert type(colorize_nlabels)==int
             self.register_buffer("colorize", torch.randn(3, colorize_nlabels, 1, 1))
@@ -115,26 +132,14 @@ class AutoencoderKL(pl.LightningModule):
             self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
     
     def preprocess(self, x):
-        #print(f"Range of x before pre_layer_1: min = {x.min().item()}, max = {x.max().item()}")
-        
         x = self.pre_layer_1(x)
-        
-        #print(f"Range of x after pre_layer_1: min = {x.min().item()}, max = {x.max().item()}")
         x = self.pre_layer_2(x)
-        
-        #print(f"Range of x after pre_layer_2: min = {x.min().item()}, max = {x.max().item()}")
-
+    
         return x
 
     def post_process(self, x):
-        #print(f"Range of x before upsample_1: min = {x.min().item()}, max = {x.max().item()}")
-        
         x = self.upsample_1(x)
-        
-        #print(f"Range of x after upsample_1: min = {x.min().item()}, max = {x.max().item()}")
-
         x = self.upsample_2(x)
-        #print(f"Range of x after upsample_2: min = {x.min().item()}, max = {x.max().item()}")
 
         return x
 
@@ -155,19 +160,36 @@ class AutoencoderKL(pl.LightningModule):
     def encode(self, x):
         x = self.preprocess(x)
         h = self.encoder(x)
-        #print(f"Range of x after self.encoder: min = {h.min().item()}, max = {h.max().item()}")
         moments = self.quant_conv(h)
-        posterior = DiagonalGaussianDistribution(moments)
-        #print(posterior.sample().shape)
-        # print("posterior.sample() min, max ,mean:", posterior.sample().min().item(), posterior.sample().max().item(), posterior.sample().mean().item())
+        
+        posterior = CompressedGaussianDistribution(moments, self.U_k)
         return posterior
 
     def decode(self, z):
-        # print(z.shape)
         z = self.post_quant_conv(z)
         dec = self.decoder(z)
         dec = self.post_process(dec)
+        
         return dec
+    
+    def decode(self, z):
+        batch_size = z.shape[0]
+        
+        channels, height, width = self.original_latent_shape 
+        
+        
+        z = z.reshape(batch_size, channels, -1)
+        z = z.reshape(batch_size, -1)
+        z = z.permute(1, 0)
+        
+        z_decompressed = torch.matmul(self.U_k, z)
+        z_decompressed = z_decompressed.view(batch_size, channels, height, width)  
+        z = self.post_quant_conv(z_decompressed)
+        dec = self.decoder(z)
+        dec = self.post_process(dec)
+        
+        return dec
+
 
     def forward(self, input, sample_posterior=True):
         posterior = self.encode(input)
@@ -197,6 +219,7 @@ class AutoencoderKL(pl.LightningModule):
         print("")
 
     def training_step(self, batch, batch_idx):
+        print("AUTOENCODER TRAINING STEP BEING CALLED")
         inputs = self.get_input(batch, self.image_key)
         reconstructions, posterior = self(inputs)  # forward
         
@@ -219,6 +242,7 @@ class AutoencoderKL(pl.LightningModule):
         return loss[0]
 
     def validation_step(self, batch, batch_idx):
+        print("AUTOENCODER VALIDATION STEP BEING CALLED")
         inputs = self.get_input(batch, self.image_key)
         reconstructions, posterior = self(inputs)
         
@@ -236,9 +260,11 @@ class AutoencoderKL(pl.LightningModule):
             split="val"
             )
 
-        self.log("val/rec_loss", log_dict_ae["val/rec_loss"])
-        self.log_dict(log_dict_ae)
-        return self.log_dict
+        self.log("val/MS_SSIM_loss", loss[1], prog_bar=True, logger=True, on_step=False, on_epoch=True)
+        self.log("val/pixel_loss", loss[2], prog_bar=True, logger=True, on_step=False, on_epoch=True)
+        self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=False, on_epoch=True)
+
+        return loss[0]
 
 
 
@@ -270,8 +296,8 @@ class AutoencoderKL(pl.LightningModule):
             if x.shape[1] > 3:
                 # colorize with random projection
                 assert xrec.shape[1] > 3
-                x = self.to_rgb(x)
-                xrec = self.to_rgb(xrec)
+                # x = self.to_rgb(x)
+                # xrec = self.to_rgb(xrec)
             log["samples"] = self.decode(torch.randn_like(posterior.sample()))
             log["reconstructions"] = xrec
         log["inputs"] = x

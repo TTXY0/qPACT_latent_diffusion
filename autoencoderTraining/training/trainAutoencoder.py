@@ -9,7 +9,7 @@ from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint, LearningRateMonitor
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from autoencoderTraining.models.autoencoder_downsample import AutoencoderKL
+from models.autoencoder_downsample import AutoencoderKL
 import pickle
 import numpy as np
 import matplotlib.pyplot as plt
@@ -138,13 +138,8 @@ class WeightAndGradientNormLoggingCallback(Callback):
 
 if __name__ == "__main__":
     ENV = os.getenv('TRAIN_ENV', 'local')
-
-    config_paths = {
-        'super': '/scratch/10122/thomaswynn7394/latentDiffusion/autoencoderTraining/configs/config_super_f8.yaml',
-        'local': '/workspace/thomas/latentDiffusion/autoencoderTraining/configs/config_local_f8.yaml'
-    }
     
-    config_path = config_paths.get(ENV, config_paths['local'])
+    config_path = "/workspace/thomas/latentDiffusion/autoencoderTraining/configs/config_local_k1024.yaml"
 
     with open(config_path, 'r') as file:
         config = yaml.safe_load(file)

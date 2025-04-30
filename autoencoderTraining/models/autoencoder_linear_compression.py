@@ -13,9 +13,11 @@ from ldm.util import instantiate_from_config
 
 
 class CompressedGaussianDistribution(object):
-    def __init__(self, parameters, U_k, deterministic=False):
+    def __init__(self, parameters, U_k, flattened_latent_mean, deterministic=False):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.U_k = U_k.to(self.device)
+        
+        self.flattened_latent_mean = flattened_latent_mean.to(self.device)
         self.parameters = parameters
         self.mean, self.logvar = torch.chunk(parameters, 2, dim=1)
         self.logvar = torch.clamp(self.logvar, -30.0, 20.0)
@@ -27,15 +29,25 @@ class CompressedGaussianDistribution(object):
 
     def sample(self):
         batch_size, channels, height, width = self.mean.shape
-        mean_flat = self.mean.reshape(-1,batch_size)  # (C*H*W, N)
-        std_flat = self.std.reshape(-1, batch_size)  # (C*H*W, N)
+        
+        mean_flat = self.mean.reshape(batch_size,-1)  # results in (2, 4096)
+        std_flat = self.std.reshape(batch_size, -1)  # (2, 4096)
+        mean_flat = mean_flat.transpose(0, 1) # results in (4096, 2)
+        std_flat = std_flat.transpose(0, 1)# results in (4096, 2)
+        
+        
         noise = torch.randn_like(mean_flat)
         
-        # (3) sum mu + output of (2)
-        sample = mean_flat + noise * std_flat
+        sample = mean_flat + noise * std_flat # [4096, 1]
         sample  = sample.to(self.device)
-        # (4) apply U_k
-        x = torch.matmul(self.U_k.T, sample)  # (k,N)
+        
+        sample = sample - self.flattened_latent_mean#[:, None]
+        x = torch.matmul(self.U_k.T, sample)  # results in (4096, 2)
+        
+        x = x.transpose(0,1) # results in (2, 4096)
+        x = x.reshape(batch_size, -1)
+        x = x.reshape(batch_size, channels, -1)
+        x = x.reshape(batch_size, channels, height//2, -1) #results in (3, 4, 16,16)
         return x
 
     def kl(self, other=None):
@@ -67,6 +79,7 @@ class AutoencoderKL(pl.LightningModule):
     def __init__(self,
                  k,
                  U_path,
+                 latent_mean_path,
                  ddconfig,
                  lossconfig,
                  embed_dim,
@@ -103,6 +116,10 @@ class AutoencoderKL(pl.LightningModule):
         self.k = k
         self.U = torch.load(U_path).to(device)
         self.U_k = self.U[:,:k]
+        
+        self.latent_mean_path = latent_mean_path
+        self.flattened_latent_mean = torch.load(latent_mean_path).to(device)
+        
         self.quant_conv = torch.nn.Conv2d(2*ddconfig["z_channels"], 2*embed_dim, 1)
         self.post_quant_conv = torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1)
         self.embed_dim = embed_dim
@@ -142,42 +159,29 @@ class AutoencoderKL(pl.LightningModule):
             print(f"Unexpected Keys: {unexpected}")
 
     def encode(self, x):
-        # (1) encode the sample to get the mean mu and the pointwise standard devation of the sample
         x = self.preprocess(x)
         h = self.encoder(x)
         moments = self.quant_conv(h)
-        # mean, logvar = torch.chunk(moments, 2, dim=1) 
-        # logvar = torch.clamp(logvar, -30.0, 20.0)
-        # std = torch.exp(0.5 * logvar)
-        # var = torch.exp(logvar)
         
-        
-        # # (2) sample z as white noise in the 4096 dimensional space,
-        # batch_size, channels, height, width = mean.shape
-        # mean_flat = mean.reshape(-1,batch_size)  # (C*H*W, N)
-        # std_flat = std.reshape(-1, batch_size)  # (C*H*W, N)
-        
-        # noise = torch.randn_like(mean_flat)
-        
-        # # (3) sum mu + output of (2)
-        # sample = mean_flat + noise * std_flat
-        
-        # # (4) apply U_k
-        # compressed_sample = torch.matmul(self.U_k.T, sample)  # (k,N)
-        
-        posterior = CompressedGaussianDistribution(moments, self.U_k)
+        posterior = CompressedGaussianDistribution(moments, self.U_k, self.flattened_latent_mean)
         return posterior
 
 
     def decode(self, z):
         # Decompress
-        z_decompressed = torch.matmul(self.U_k, z)  #(C*H*W, N)
         
-        # Reshape
-        batch_size = z_decompressed.shape[1]
+        batch_size = z.shape[0]
+        z = z.reshape(batch_size, -1)  # results in (3, 1024)
+        z = z.transpose(0, 1)  # restuls in (1024, 3)
+
+        z_decompressed = torch.matmul(self.U_k, z)  # results in (4096, 3)
+        z_decompressed = z_decompressed  + self.flattened_latent_mean
+
         channels, height, width = self.original_latent_shape  
-        
-        z_decompressed = z_decompressed.view(batch_size, channels, height, width)  
+        z_decompressed = z_decompressed.transpose(0, 1)
+        z_decompressed = z_decompressed.reshape(batch_size, channels, -1)  
+        z_decompressed = z_decompressed.reshape(batch_size, channels, height, -1)  
+        z_decompressed = z_decompressed.reshape(batch_size, channels, height, width)  
         
        
         z = self.post_quant_conv(z_decompressed)
@@ -214,6 +218,7 @@ class AutoencoderKL(pl.LightningModule):
         print("")
 
     def training_step(self, batch, batch_idx):
+       #print("AUTOENCODER TRAINING STEP BEING CALLED")
         inputs = self.get_input(batch, self.image_key)
         reconstructions, posterior = self(inputs)  # forward
         
@@ -236,6 +241,7 @@ class AutoencoderKL(pl.LightningModule):
         return loss[0]
 
     def validation_step(self, batch, batch_idx):
+        #print("AUTOENCODER VALIDATION STEP BEING CALLED")
         inputs = self.get_input(batch, self.image_key)
         reconstructions, posterior = self(inputs)
         
@@ -303,23 +309,3 @@ class AutoencoderKL(pl.LightningModule):
         x = F.conv2d(x, weight=self.colorize)
         x = 2.*(x-x.min())/(x.max()-x.min()) - 1.
         return x
-
-
-# class IdentityFirstStage(torch.nn.Module):
-#     def __init__(self, *args, vq_interface=False, **kwargs):
-#         self.vq_interface = vq_interface  # TODO: Should be true by default but check to not break older stuff
-#         super().__init__()
-
-#     def encode(self, x, *args, **kwargs):
-#         return x
-
-#     def decode(self, x, *args, **kwargs):
-#         return x
-
-#     def quantize(self, x, *args, **kwargs):
-#         if self.vq_interface:
-#             return x, None, [None, None, None]
-#         return x
-
-#     def forward(self, x, *args, **kwargs):
-#         return x

@@ -81,7 +81,7 @@ def convsample(model, shape, return_intermediates=True,
                                    return_intermediates=return_intermediates, verbose=verbose)
     else:
         return model.progressive_denoising(
-            None, [10,4,16,16], verbose=True
+            None, shape, verbose=True
         )
 
 
@@ -101,15 +101,10 @@ def make_convolutional_sample(model, batch_size, vanilla=False, custom_steps=Non
 
     log = dict()
 
-    # shape = [batch_size,
-    #          model.model.diffusion_model.in_channels,
-    #          model.model.diffusion_model.image_size,
-    #          model.model.diffusion_model.image_size]
-    # TODO : donthardcode 
     shape = [batch_size,
-            4,
-            16,
-            16]
+             model.model.diffusion_model.in_channels,
+             model.model.diffusion_model.image_size,
+             model.model.diffusion_model.image_size]
 
     with model.ema_scope("Plotting"):
         t0 = time.time()

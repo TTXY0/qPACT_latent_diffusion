@@ -449,7 +449,7 @@ class UNetModel(nn.Module):
         num_res_blocks,
         attention_resolutions,
         use_svd = False,
-        svd_path = None,
+        U_path = None,
         k = None, #Truncation value for SVD
         full_latent_dim = None,
         dropout=0,
@@ -489,11 +489,6 @@ class UNetModel(nn.Module):
 
         if num_head_channels == -1:
             assert num_heads != -1, 'Either num_heads or num_head_channels has to be set'
-            
-        self.use_svd = use_svd
-        self.svd_path = svd_path #Path of U matrix from SVD
-        self.k = k #Truncation value for SVD
-        self.full_latent_dim = full_latent_dim
 
         self.image_size = image_size
         self.in_channels = in_channels
@@ -501,6 +496,10 @@ class UNetModel(nn.Module):
         self.out_channels = out_channels
         self.num_res_blocks = num_res_blocks
         self.attention_resolutions = attention_resolutions
+        self.use_svd = use_svd
+        self.U_path = U_path #Path of U matrix from SVD
+        self.k = k #Truncation value for SVD
+        self.full_latent_dim = full_latent_dim
         self.dropout = dropout
         self.channel_mult = channel_mult
         self.conv_resample = conv_resample
@@ -511,6 +510,15 @@ class UNetModel(nn.Module):
         self.num_head_channels = num_head_channels
         self.num_heads_upsample = num_heads_upsample
         self.predict_codebook_ids = n_embed is not None
+        
+        if self.use_svd :
+            try :
+                device = th.device('cuda' if th.cuda.is_available() else 'cpu')
+                self.U = th.load(U_path).to(device)
+                self.U_k =  self.U[:, :k]
+            except :
+                print("U_path should be specified correctly")
+            
 
         time_embed_dim = model_channels * 4
         self.time_embed = nn.Sequential(
@@ -729,22 +737,53 @@ class UNetModel(nn.Module):
             self.num_classes is not None
         ), "must specify y if and only if the model is class-conditional"
         hs = []
+        #print("self model_channels", self.model_channels)
+        #print("timesteps", timesteps.shape)
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
+        #print("size of t-emb", t_emb.shape)
         emb = self.time_embed(t_emb)
-        ############
+        #print("size of emb:: ", emb.shape)
+
         if self.num_classes is not None:
             assert y.shape == (x.shape[0],)
             emb = emb + self.label_emb(y)
 
         h = x.type(self.dtype)
+        # Insert V^T SVD Layer ?
+        if self.use_svd:
+            batch_size = h.shape[1]
+            h_mean = h.mean()
+            h = h - h_mean
+            h = th.matmul(self.U_k, h)
+            h = h.view(batch_size, self.full_latent_dim
+                       [0], self.full_latent_dim[1], self.full_latent_dim[2])  
+            
+            # Must apply same computations to emb
+            x3_model_channel = emb.shape[1]
+            emb_mean = emb.mean()
+            emb = emb - emb_mean
+            emb = th.matmul(self.U_k, emb)
+            emb = emb.view(x3_model_channel, self.full_latent_dim[0], self.full_latent_dim[1], self.full_latent_dim[2])  
+            #print('modified emb dims: ', emb.shape)
+        
         for module in self.input_blocks:
+            #print("line 764", h.shape, emb.shape, context)
             h = module(h, emb, context)
             hs.append(h)
         h = self.middle_block(h, emb, context)
+        
         for module in self.output_blocks:
             h = th.cat([h, hs.pop()], dim=1)
             h = module(h, emb, context)
         h = h.type(x.dtype)
+        
+        #Insert V SVD Layer
+        if self.use_svd:
+            h = h.flatten()
+            h = th.matmul(self.U_k.t(), h)
+            h = h + h_mean
+            
+            
         if self.predict_codebook_ids:
             return self.id_predictor(h)
         else:

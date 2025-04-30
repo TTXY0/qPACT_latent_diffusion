@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from models.autoencoder_downsample import AutoencoderKL
 from losses.ssim import ssim
 import torch.nn.functional as F
-k = 2000
+k = 1024
 def get_mean(image_files):
     all_encoded_samples = []
     for img_number, image_file in enumerate(image_files):
@@ -74,7 +74,7 @@ if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = AutoencoderKL(**config['model']['params']).to(device)
     model.eval()
-    model.init_from_ckpt("/workspace/thomas/latentDiffusion/autoencoderTraining/weights/no_explosion_10.ckpt")
+    model.init_from_ckpt("/workspace/thomas/latentDiffusion/autoencoderTraining/weights/kl-f8-10.ckpt")
 
     U_path = 'U.pt'
     S_path = 'sing_vals.pt'

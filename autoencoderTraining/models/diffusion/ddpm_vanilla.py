@@ -25,8 +25,6 @@ from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, Autoenc
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
 from ldm.models.diffusion.ddim import DDIMSampler
 
-from models.autoencoder_linear_compression import CompressedGaussianDistribution
-
 
 __conditioning_keys__ = {'concat': 'c_concat',
                          'crossattn': 'c_crossattn',
@@ -275,6 +273,9 @@ class DDPM(pl.LightningModule):
 
     def q_sample(self, x_start, t, noise=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
+        # print(extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape).shape)
+        # print(extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape).shape)
+        #print("noise shape in q_sample: ", noise.shape)
         return (extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start +
                 extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise)
 
@@ -544,8 +545,6 @@ class LatentDiffusion(DDPM):
     def get_first_stage_encoding(self, encoder_posterior):
         if isinstance(encoder_posterior, DiagonalGaussianDistribution):
             z = encoder_posterior.sample()
-        elif isinstance(encoder_posterior, CompressedGaussianDistribution):
-            z = encoder_posterior.sample()
         elif isinstance(encoder_posterior, torch.Tensor):
             z = encoder_posterior
         else:
@@ -557,8 +556,6 @@ class LatentDiffusion(DDPM):
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
                 c = self.cond_stage_model.encode(c)
                 if isinstance(c, DiagonalGaussianDistribution):
-                    c = c.mode()
-                if isinstance(c, CompressedGaussianDistribution):
                     c = c.mode()
             else:
                 c = self.cond_stage_model(c)
@@ -1404,30 +1401,10 @@ class DiffusionWrapper(pl.LightningModule):
         self.diffusion_model = instantiate_from_config(diff_model_config)
         self.conditioning_key = conditioning_key
         assert self.conditioning_key in [None, 'concat', 'crossattn', 'hybrid', 'adm']
-        
-        #TODO : initialize diff model config as a dictionary and get the values from it instead of using the diffuion model object
-        if self.diffusion_model.use_svd : 
-            try :
-                self.U = torch.load(self.diffusion_model.svd_path)
-                self.U_k =  self.U[:, :self.diffusion_model.k].to('cuda').requires_grad_(False)
-                self.full_latent_dim = self.diffusion_model.full_latent_dim
-            except :
-                print("U_path should be specified correctly")
 
     def forward(self, x, t, c_concat: list = None, c_crossattn: list = None):
-        # batch_size, channels, h, w = x.shape
-        
-        # x = x.permute(3,2,1,0) # get to (w,h,c,b)
-        
-        # x = x.reshape(-1, channels, batch_size) # get to (w*h,c,b)
-        # x = x.reshape(-1, batch_size) # get to (w*h*c,b)
-        
-        # x = torch.matmul(self.U_k, x) # get to (4096, b)
-        # x = x.permute(1,0) # get to (b, 4096)
-        
-        # x = x.reshape(batch_size, self.full_latent_dim
-        #             [0], self.full_latent_dim[1], self.full_latent_dim[2])  
-        
+        # print("out shape", x.shape)
+        # print("1425 out min, max, mean: ", x.min(), x.max(), x.mean())
         if self.conditioning_key is None:
             out = self.diffusion_model(x, t)
         elif self.conditioning_key == 'concat':
@@ -1445,16 +1422,8 @@ class DiffusionWrapper(pl.LightningModule):
             out = self.diffusion_model(x, t, y=cc)
         else:
             raise NotImplementedError()
-        
-        # out = out.permute(3,2,1,0) # get to (b,c,h,w)
-        
-        # out = out.reshape(-1, channels, batch_size)
-        # out = out.reshape(-1, batch_size)
-        
-        
-        # out = torch.matmul(self.U_k.T, out)
-        # out = out.permute(1,0).contiguous()
-        # out = out.reshape(batch_size, self.full_latent_dim[0], 16, 16)
+        # print("out shape", out.shape)
+        # print("1449 out min, max, mean: ", out.min(), out.max(), out.mean())
         return out
 
 

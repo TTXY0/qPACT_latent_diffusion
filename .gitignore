@@ -15,3 +15,5 @@ scripts/taming
 taming
 taming-transformers
 misc_data
+.vscode
+__pycache__

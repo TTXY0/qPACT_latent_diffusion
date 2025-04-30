@@ -1,0 +1,34 @@
+nohup: ignoring input
+Global seed set to 42
+GPU available: True, used: True
+TPU available: False, using: 0 TPU cores
+IPU available: False, using: 0 IPUs
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0]
+
+  | Name            | Type               | Params
+-------------------------------------------------------
+0 | encoder         | Encoder            | 34.2 M
+1 | decoder         | Decoder            | 49.5 M
+2 | pre_layer_1     | Conv2d             | 12    
+3 | pre_layer_2     | Conv2d             | 36    
+4 | upsample_1      | ConvTranspose2d    | 36    
+5 | upsample_2      | ConvTranspose2d    | 12    
+6 | quant_conv      | Conv2d             | 72    
+7 | post_quant_conv | Conv2d             | 20    
+8 | latent_ae       | latent_autoencoder | 3.4 M 
+9 | msssim_loss_fn  | MS_SSIM            | 0     
+-------------------------------------------------------
+3.4 M     Trainable params
+83.7 M    Non-trainable params
+87.1 M    Total params
+348.250   Total estimated model params size (MB)
+Global seed set to 42
+Metric val/total_loss improved. New best score: 25.939
+Metric val/total_loss improved by 8.195 >= min_delta = 0.0. New best score: 17.745
+Metric val/total_loss improved by 5.701 >= min_delta = 0.0. New best score: 12.043
+Metric val/total_loss improved by 0.483 >= min_delta = 0.0. New best score: 11.560
+Metric val/total_loss improved by 0.151 >= min_delta = 0.0. New best score: 11.410
+Metric val/total_loss improved by 0.337 >= min_delta = 0.0. New best score: 11.073
+Metric val/total_loss improved by 0.119 >= min_delta = 0.0. New best score: 10.954
+Metric val/total_loss improved by 0.135 >= min_delta = 0.0. New best score: 10.819
+Metric val/total_loss improved by 0.005 >= min_delta = 0.0. New best score: 10.815

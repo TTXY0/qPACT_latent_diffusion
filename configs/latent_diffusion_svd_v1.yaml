@@ -1,0 +1,119 @@
+model:
+  base_learning_rate: 5.0e-05
+  target: models.diffusion.ddpm_svd_v1.LatentDiffusion
+  params:
+    linear_start: 0.0015
+    linear_end: 0.0155
+    num_timesteps_cond: 1
+    log_every_t: 200
+    timesteps: 1000
+    loss_type: l2
+    first_stage_key: image
+    cond_stage_key: image
+    image_size: 16
+    channels: 4
+    cond_stage_trainable: false
+    concat_mode: false
+    scale_by_std: true
+    monitor: val/loss_simple_ema
+    scheduler_config:
+      target: ldm.lr_scheduler.LambdaLinearScheduler
+      params:
+        warm_up_steps:
+        - 10000
+        cycle_lengths:
+        - 10000000000000
+        f_start:
+        - 1.0e-06
+        f_max:
+        - 1.0
+        f_min:
+        - 1.0
+    unet_config:
+      target: models.diffusion.openaimodel.UNetModel
+      params:
+        image_size: 32
+        in_channels: 4
+        out_channels: 4
+        model_channels: 192
+        attention_resolutions:
+        - 1
+        - 2
+        - 4
+        - 8
+        use_svd: true
+        k: 1024
+        full_latent_dim:
+        - 4
+        - 32
+        - 32
+        svd_path: /workspace/thomas/latentDiffusion/U.pt
+        #latent_mean_path: /workspace/thomas/latentDiffusion/flattened_latents.pt
+        num_res_blocks: 2
+        channel_mult:
+        - 1
+        - 2
+        - 2
+        - 4
+        - 4
+        num_heads: 8
+        use_scale_shift_norm: true
+        resblock_updown: true
+    first_stage_config:
+      target: models.autoencoder_linear_compression.AutoencoderKL
+      params:
+        k: 1024
+        #U_path: /workspace/thomas/latentDiffusion/U.pt
+        U_path: /workspace/thomas/latentDiffusion/autoencoderTraining/scripts/U_old.pt
+        latent_mean_path: /workspace/thomas/latentDiffusion/flattened_mean.pt
+        monitor: val/rec_loss
+        ckpt_path: /workspace/thomas/latentDiffusion/autoencoderTraining/weights/kl-f8-10.ckpt
+        embed_dim: 4
+        ddconfig:
+          double_z: true
+          z_channels: 4
+          resolution: 256
+          in_channels: 3
+          out_ch: 3
+          ch: 128
+          ch_mult:
+          - 1
+          - 2
+          - 4
+          - 4
+          num_res_blocks: 2
+          attn_resolutions: []
+          dropout: 0.0
+        lossconfig:
+          target: torch.nn.Identity
+    cond_stage_config: __is_unconditional__
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 3
+    num_workers: 5
+    train:
+      target: data.loader.CustomImagePickleDataset
+      params:
+        data_root: /workspace/thomas/latentDiffusion/autoencoderTraining/data/MuaSlices/train
+    validation:
+      target: data.loader.CustomImagePickleDataset
+      params:
+        data_root: /workspace/thomas/latentDiffusion/autoencoderTraining/data/MuaSlices/val
+
+lightning:
+  callbacks:
+    image_logger:
+      target: main.ImageLogger
+      params:
+        batch_frequency: 1000
+        max_images: 8
+        increase_log_steps: true
+  trainer:
+    gpus: '0'
+    max_epochs: 50
+    limit_train_batches: 6665
+    limit_val_batches: 3332
+    precision: 32
+    log_every_n_steps: 50
+    accelerator: ddp

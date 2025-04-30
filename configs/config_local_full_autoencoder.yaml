@@ -1,0 +1,88 @@
+logfile : /workspace/thomas/latentDiffusion/autoencoderTraining/tb_logs
+model:
+  base_learning_rate: 1.0e-05
+  target: ldm.models.autoencoder.AutoencoderKL
+  params:
+    monitor: val/rec_loss
+    ckpt_path: /workspace/thomas/latentDiffusion/autoencoderTraining/weights/kl-f8-10.ckpt
+    #ckpt_path: /workspace/thomas/latentDiffusion/autoencoderTraining/lightning_logs/version_166/checkpoints/epoch=0-step=9999.ckpt
+    # ckpt_path : /workspace/thomas/latentDiffusion/epoch=1-step=6668.ckpt
+    embed_dim: 4
+    # lossconfig:
+    #   target: losses.loss.MSSSIM_Loss
+    #   params:
+    #     disc_start: 100000000000000
+    #     kl_weight: 1.0e-06
+    #     disc_weight: 0
+    ddconfig:
+      double_z: true
+      z_channels: 4
+      resolution: 256
+      in_channels: 3
+      out_ch: 3
+      ch: 128
+      ch_mult:
+      - 1
+      - 2
+      - 4
+      - 4
+      num_res_blocks: 2
+      attn_resolutions: []
+      dropout: 0.0
+    latent_ae_config: 
+      # params:
+      #   monitor: val/rec_loss
+      #   ckpt_path: /workspace/thomas/latentDiffusion/autoencoderTraining/weights/kl-f8-10.ckpt
+      #   #ckpt_path: /workspace/thomas/latentDiffusion/autoencoderTraining/lightning_logs/version_166/checkpoints/epoch=0-step=9999.ckpt
+      #   # ckpt_path : /workspace/thomas/latentDiffusion/epoch=1-step=6668.ckpt
+      #   embed_dim: 4
+      #   lossconfig:
+      #     #target: losses.loss.MSSSIM_Loss
+      #     params:
+      #       disc_start: 100000000000000
+      #       kl_weight: 1.0e-06
+      #       disc_weight: 0
+      embed_dim: 4
+      ddconfig:
+        double_z: true
+        z_channels: 4
+        resolution: 32
+        in_channels: 4
+        out_ch: 4
+        ch: 128
+        ch_mult:
+        - 1
+        - 1
+        num_res_blocks: 1
+        attn_resolutions: []
+        dropout: 0.0
+
+
+data:
+  target: CustomImagePickleDataset
+  params:
+    batch_size: 16
+    num_workers: 5
+    train:
+      target: CustomImagePickleDataset
+      params:
+        data_root: /workspace/thomas/latentDiffusion/autoencoderTraining/data/MuaSlices/train
+        size: 1024
+    validation:
+      target: CustomImagePickleDataset
+      params:
+        data_root: /workspace/thomas/latentDiffusion/autoencoderTraining/data/MuaSlices/val
+        size: 1024
+lightning:
+  callbacks:
+    image_logger:
+      target: main.ImageLogger
+      params:
+        batch_frequency: 1000
+        max_images: 8
+        increase_log_steps: True
+  trainer:
+    max_epochs: 10
+    gpus: 1
+    precision: 32
+    log_every_n_steps: 50

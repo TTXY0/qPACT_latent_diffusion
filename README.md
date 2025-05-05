@@ -6,7 +6,7 @@ Latent Diffusion Model (LDM) using Singular Value Decomposition based dimensiona
 
 ## Overview
 
-Please see project_summary.pdf
+Please see [the project summary](summary.pdf) for a technical overview of this repository and applications.
 
 By encoding log(µₐ) maps into a structured latent space, applying singular value decomposition (SVD) to reduce dimensionality, and training a diffusion model in this compressed space, we enable efficient sampling, denoising, and CRB estimation. This repository contatins the training, sampling, and analysis pipelines for the LDM.
 
@@ -44,7 +44,7 @@ See the README.md in the stable diffusion repository for environemnt setup
 
 ---
 
-### 2. Train the Autoencoder
+### 2. Autoencdoer Training
 
 cd autoencoderTraining  
 python trainAutoencoder.py
@@ -54,7 +54,7 @@ python trainAutoencoder.py
 
 ---
 
-### 4. Train the Latent Diffusion Model
+### 3. Latent Diffusion Model Training
 
 cd diffusionTraining  
 python main.py \
@@ -68,7 +68,7 @@ python main.py \
 
 ---
 
-### 5. Sample from the Trained Diffusion Model
+### 4. Sample from the Trained Diffusion Model
 
 cd sampling  
 python scripts/sample_diffusion.py \
